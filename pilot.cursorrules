@@ -1,0 +1,119 @@
+## Project Overview
+Objective: Build a backend for a production-standard demo application that connects to the TrueLayer API via REST. The backend will handle API endpoints for user authentication, data retrieval, and developer console functionalities.
+
+Tech Stack: Node.js with Express.js, MongoDB for database management, Passport.js (for OAuth or JWT-based authentication), Axios for HTTP requests to TrueLayer, Joi for input validation, and Winston for logging.
+
+Core Packages and Libraries
+Express.js: Used to define RESTful API routes, middleware, and error handling.
+MongoDB: MongoDB as the database, accessed through Mongoose (ORM) for defining schemas and managing data.
+Axios: For HTTP requests to the TrueLayer API, handling API interaction in a consistent and promise-based way.
+Passport.js: Handle user authentication via OAuth (or JWT as needed), with support for secure authentication flows.
+Joi: For validating request data to ensure incoming data is clean and conforms to expected schema definitions.
+Winston: Logging for both error and operational logs, with morgan as middleware for HTTP request logging.
+
+## Standards and Best Practices
+
+### API Design:
+Follow RESTful conventions for endpoint design.
+Use meaningful, versioned endpoints (e.g., /api/v1/users).
+
+### Error Handling:
+Use consistent error classes to distinguish between client (4xx) and server (5xx) errors.
+Implement a global error-handling middleware to format and log errors.
+
+### Logging:
+Use Winston for structured logging. Log errors, critical operations (e.g., authentication events), and API requests.
+Use Morgan middleware for HTTP request logging with Express.
+
+### Security:
+Handle sensitive data securely (e.g., avoid storing tokens in URLs).
+Ensure secure storage and transmission of sensitive data.
+Use Helmet middleware for setting HTTP headers to secure Express apps.
+
+### Validation:
+Use Joi to validate all incoming data on each endpoint, ensuring that only valid and safe data is processed by the backend.
+
+### Testing:
+Follow TDD principles. Write unit tests with Jest for individual routes and middleware.
+Use Supertest for integration testing of Express routes.
+Aim for 80%+ test coverage, focusing on core logic (e.g., authentication, data retrieval, error handling).
+
+## Specific Tasks for Cursor AI
+
+### Authentication Setup:
+
+Implement OAuth or JWT-based authentication with Passport.js.
+Configure secure login and logout endpoints.
+Ensure secure token handling (e.g., storing tokens in HTTP-only cookies).
+
+### API Route Definitions:
+
+Define RESTful routes to interact with the frontend. Core routes may include:
+/api/v1/auth: Authentication endpoints (e.g., login, logout).
+/api/v1/users: User-related endpoints for retrieving and managing user data.
+/api/v1/console: Endpoints related to developer console actions (e.g., key management).
+Use appropriate HTTP methods (e.g., GET for fetching, POST for creating) for each route.
+
+### TrueLayer Integration:
+
+Use Axios to connect to TrueLayer’s API. Handle authentication flow, token exchange, and data retrieval for authorized users.
+Create utility functions or services that handle specific TrueLayer endpoints to avoid repetitive code.
+
+### Error Handling and Logging:
+
+Use custom error classes to structure different types of errors (e.g., ValidationError, AuthError).
+Implement a global error-handling middleware in Express to catch and log errors consistently.
+Configure Winston to log error details, user interactions, and API calls for tracking and debugging.
+
+### Database Setup:
+
+Define MongoDB schemas using Mongoose to represent entities (e.g., User, APIKey).
+Implement basic CRUD operations in a way that is modular and reusable.
+Ensure schema validation at the database level as an additional safeguard.
+
+### Testing:
+
+Write unit tests with Jest for each route, middleware, and utility function.
+Write integration tests with Supertest to verify the overall functionality of each route and middleware.
+Document test cases and aim for high coverage, especially for key functions like authentication and API interaction.
+
+### Workflow and Iterations
+
+Task Review: After each function, module, or feature is created, initiate a review to check for alignment with best practices, error handling, and logging. 
+
+Refinement: Based on test results and review feedback, iterate on each feature to enhance stability and performance.
+Documentation: Generate inline comments to explain complex logic and provide brief documentation for each module.
+
+### Expected Output for Cursor AI in the Pilot
+Fully Functional Backend Modules: Complete backend modules that connect to TrueLayer, manage user authentication, and handle API interactions.
+Documented Code with Inline Comments: Code that is well-commented, especially for core modules and logic.
+Comprehensive Testing: High-coverage unit and integration tests, ensuring the reliability of all major components and workflows.
+
+### Suggested directory structure:
+
+pilot-backend/
+├── src/
+│   ├── config/               # Configuration files (e.g., env variables, DB config)
+│   ├── controllers/          # Functions to handle request logic
+│   ├── middleware/           # Custom Express middleware (e.g., error handling, logging)
+│   ├── models/               # Mongoose models (database schemas)
+│   ├── routes/               # Route definitions (organized by module)
+│   ├── services/             # Services (e.g., business logic, utility functions)
+│   ├── utils/                # Utility functions (e.g., error classes, helpers)
+│   ├── validations/          # Joi validation schemas for incoming requests
+│   ├── tests/                # Test files for Jest and Supertest
+│   └── index.js              # Main server file (server setup, middleware, and routes)
+├── .env                      # Environment variables
+├── .eslintrc.js              # Linter configuration
+├── .gitignore                # Git ignore file
+├── package.json              # Project dependencies and scripts
+└── README.md                 # Project documentation
+
+Follow this directory structure when creating files for the backend:
+src/controllers/ for request handling logic.
+src/middleware/ for custom Express middleware (e.g., error handling).
+src/models/ for Mongoose schemas.
+src/routes/ for route definitions.
+src/services/ for business logic and utilities.
+src/validations/ for Joi schemas to validate incoming request data.
+src/tests/ for Jest and Supertest tests.
