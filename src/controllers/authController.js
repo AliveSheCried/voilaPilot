@@ -9,6 +9,7 @@ const jwt = require("jsonwebtoken");
 const config = require("../config/config");
 const { v4: uuidv4 } = require("uuid");
 const TokenBlacklist = require("../models/TokenBlacklist");
+const TrueLayerService = require("../services/trueLayerService");
 
 // Utility function to mask email
 const maskEmail = (email) => {
@@ -372,6 +373,114 @@ const logout = async (req, res, next) => {
   }
 };
 
+/**
+ * Exchange TrueLayer authorization code for access and refresh tokens
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const exchangeTrueLayerToken = async (req, res) => {
+  const { code } = req.body;
+  const userId = req.user.id;
+  const clientIp = req.ip;
+
+  try {
+    if (!code) {
+      logger.warn("Missing authorization code in token exchange request", {
+        userId,
+        clientIp,
+      });
+      return res.status(400).json({
+        success: false,
+        error: "MISSING_AUTH_CODE",
+        message: "Authorization code is required",
+      });
+    }
+
+    // Exchange the code for tokens
+    const tokens = await TrueLayerService.exchangeAuthorizationCode(code);
+
+    // Validate token expiration
+    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+    if (expiresAt <= new Date()) {
+      logger.error("Received expired token from TrueLayer", {
+        userId,
+        clientIp,
+        expiresAt,
+      });
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_TOKEN_EXPIRATION",
+        message: "Received token is already expired",
+      });
+    }
+
+    // Find user and update tokens with concurrency control
+    const user = await User.findById(userId);
+    if (!user) {
+      logger.error("User not found during token exchange", {
+        userId,
+        clientIp,
+      });
+      return res.status(404).json({
+        success: false,
+        error: "USER_NOT_FOUND",
+        message: "User not found",
+      });
+    }
+
+    try {
+      const updatedUser = await user.updateTrueLayerTokens(tokens);
+
+      logger.info("Successfully connected user to TrueLayer", {
+        userId,
+        clientIp,
+        expiresAt: updatedUser.trueLayerTokenExpiresAt,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "TrueLayer connection successful",
+        data: {
+          isConnected: updatedUser.trueLayerConnected,
+          expiresAt: updatedUser.trueLayerTokenExpiresAt,
+        },
+      });
+    } catch (updateError) {
+      logger.error("Failed to update user with TrueLayer tokens", {
+        userId,
+        clientIp,
+        error: updateError.message,
+      });
+      return res.status(409).json({
+        success: false,
+        error: "TOKEN_UPDATE_FAILED",
+        message: "Failed to update user tokens due to concurrent modification",
+      });
+    }
+  } catch (error) {
+    logger.error("TrueLayer token exchange error", {
+      userId,
+      clientIp,
+      error: error.message,
+      errorCode: error.response?.data?.error,
+      statusCode: error.response?.status,
+    });
+
+    const statusCode = error.response?.status || 500;
+    const errorResponse = {
+      success: false,
+      error: "TRUELAYER_EXCHANGE_FAILED",
+      message: "Failed to connect to TrueLayer",
+    };
+
+    if (error.response?.data?.error) {
+      errorResponse.details = error.response.data.error;
+    }
+
+    res.status(statusCode).json(errorResponse);
+  }
+};
+
 module.exports = {
   register,
   registrationLimiter,
@@ -380,4 +489,5 @@ module.exports = {
   getProfile,
   refreshAccessToken,
   logout,
+  exchangeTrueLayerToken,
 };

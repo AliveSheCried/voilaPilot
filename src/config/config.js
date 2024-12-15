@@ -17,9 +17,20 @@ const requiredEnvVars = [
 const missingEnvVars = requiredEnvVars.filter((envVar) => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
-  throw new Error(
-    `Missing required environment variables: ${missingEnvVars.join(", ")}`
-  );
+  const errorMessage = `Missing required environment variables: ${missingEnvVars.join(", ")}`;
+  logger.error(errorMessage, {
+    availableVars: Object.keys(process.env).filter(
+      (key) => !key.includes("KEY")
+    ), // Log available vars without sensitive data
+    environment: process.env.NODE_ENV,
+  });
+  throw new Error(errorMessage);
+}
+
+// Validate TrueLayer private key format
+if (!process.env.PRIVATE_KEY?.includes("BEGIN EC PRIVATE KEY")) {
+  logger.error("Invalid TrueLayer private key format");
+  throw new Error("TrueLayer private key is missing or invalid");
 }
 
 const config = {
@@ -39,8 +50,26 @@ const config = {
   trueLayer: {
     clientId: process.env.TRUELAYER_CLIENT_ID,
     clientSecret: process.env.TRUELAYER_CLIENT_SECRET,
+    apiUrl: process.env.TRUELAYER_API_URL,
     kid: process.env.KID,
     privateKey: process.env.PRIVATE_KEY,
+    scopes: [
+      "info",
+      "accounts",
+      "balance",
+      "cards",
+      "transactions",
+      "offline_access",
+    ],
+    redirectUri:
+      process.env.NODE_ENV === "production"
+        ? process.env.TRUELAYER_REDIRECT_URI
+        : "http://localhost:3000/callback",
+    authUrl: "https://auth.truelayer.com",
+    tokenEndpoint: "/connect/token",
+    apiVersion: "v1",
+    timeout: 10000, // 10 seconds
+    retryAttempts: 3,
   },
   cors: {
     origin:

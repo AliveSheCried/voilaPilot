@@ -40,6 +40,33 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // TrueLayer integration fields
+    trueLayerAccessToken: {
+      type: String,
+      select: false, // Don't include in queries by default
+    },
+    trueLayerRefreshToken: {
+      type: String,
+      select: false, // Don't include in queries by default
+    },
+    trueLayerTokenExpiresAt: {
+      type: Date,
+      default: null,
+      validate: {
+        validator: function (value) {
+          return !value || value > new Date();
+        },
+        message: "Token expiration date must be in the future",
+      },
+    },
+    trueLayerConnected: {
+      type: Boolean,
+      default: false,
+    },
+    trueLayerTokenVersion: {
+      type: Number,
+      default: 0,
+    },
     createdAt: {
       type: Date,
       default: Date.now,
@@ -59,6 +86,7 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true, // Automatically manage createdAt and updatedAt
+    optimisticConcurrency: true,
   }
 );
 
@@ -143,6 +171,49 @@ userSchema.pre(/^find/, function (next) {
   }
   next();
 });
+
+// Add method for updating TrueLayer tokens with concurrency control
+userSchema.methods.updateTrueLayerTokens = async function (tokens) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const user = await this.model("User").findOneAndUpdate(
+      {
+        _id: this._id,
+        trueLayerTokenVersion: this.trueLayerTokenVersion,
+      },
+      {
+        $set: {
+          trueLayerAccessToken: tokens.access_token,
+          trueLayerRefreshToken: tokens.refresh_token,
+          trueLayerTokenExpiresAt: new Date(
+            Date.now() + tokens.expires_in * 1000
+          ),
+          trueLayerConnected: true,
+        },
+        $inc: { trueLayerTokenVersion: 1 },
+      },
+      {
+        new: true,
+        session,
+        runValidators: true,
+      }
+    );
+
+    if (!user) {
+      throw new Error("Token update failed due to concurrent modification");
+    }
+
+    await session.commitTransaction();
+    return user;
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
 
 const User = mongoose.model("User", userSchema);
 
