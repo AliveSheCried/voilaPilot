@@ -8,6 +8,7 @@ const path = require("path");
 const logger = require("./config/logger");
 const connectDB = require("./config/database");
 const authRoutes = require("./routes/authRoutes");
+const consoleRoutes = require("./routes/consoleRoutes");
 
 // Load environment variables with explicit path
 dotenv.config({ path: path.join(__dirname, "../.env") });
@@ -45,6 +46,7 @@ connectDB();
 
 // Routes
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/console", consoleRoutes);
 
 // Basic health check route
 app.get("/api/v1/health", (req, res) => {

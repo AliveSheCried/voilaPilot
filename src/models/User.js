@@ -1,5 +1,124 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const ApiKeyService = require("../services/apiKeyService");
+const apiKeyMethods = require("./apiKeyMethods");
+
+// API Key Schema
+const apiKeySchema = new mongoose.Schema(
+  {
+    key: {
+      type: String,
+      required: [true, "API key is required"],
+      select: false,
+    },
+    name: {
+      type: String,
+      required: [true, "Key name is required"],
+      trim: true,
+      maxlength: [50, "Key name cannot exceed 50 characters"],
+      index: true,
+    },
+    hashedKey: {
+      type: String,
+      required: true,
+      index: true,
+    },
+    lastUsed: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+      index: true,
+    },
+    expiresAt: {
+      type: Date,
+      default: () => new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+      index: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+  },
+  {
+    _id: true,
+  }
+);
+
+// Compound indexes for common queries
+apiKeySchema.index({ isActive: 1, expiresAt: 1 });
+apiKeySchema.index({ userId: 1, isActive: 1 });
+
+// Pre-save middleware to clean expired keys
+apiKeySchema.pre("save", async function (next) {
+  const now = new Date();
+
+  // Filter out expired or unused keys (not used in last 90 days)
+  this.apiKeys = this.apiKeys.filter((key) => {
+    const isExpired = key.expiresAt && key.expiresAt < now;
+    const isUnused =
+      key.lastUsed && now - key.lastUsed > 90 * 24 * 60 * 60 * 1000;
+
+    return !isExpired && !isUnused;
+  });
+
+  // Update apiKeyCount
+  this.apiKeyCount = this.apiKeys.length;
+
+  next();
+});
+
+// Static method to clean up expired keys across all users
+userSchema.statics.cleanupExpiredKeys = async function () {
+  const now = new Date();
+  const ninetyDaysAgo = new Date(now - 90 * 24 * 60 * 60 * 1000);
+
+  try {
+    const result = await this.updateMany(
+      {
+        $or: [
+          { "apiKeys.expiresAt": { $lt: now } },
+          { "apiKeys.lastUsed": { $lt: ninetyDaysAgo } },
+        ],
+      },
+      {
+        $pull: {
+          apiKeys: {
+            $or: [
+              { expiresAt: { $lt: now } },
+              { lastUsed: { $lt: ninetyDaysAgo } },
+            ],
+          },
+        },
+      }
+    );
+
+    logger.info("Cleaned up expired API keys", {
+      modifiedUsers: result.modifiedCount,
+    });
+
+    // Update apiKeyCount for affected users
+    await this.aggregate([
+      {
+        $match: { "apiKeys.0": { $exists: true } },
+      },
+      {
+        $set: {
+          apiKeyCount: { $size: "$apiKeys" },
+        },
+      },
+    ]);
+
+    return result;
+  } catch (error) {
+    logger.error("Failed to clean up expired keys:", error);
+    throw error;
+  }
+};
 
 const userSchema = new mongoose.Schema(
   {
@@ -25,7 +144,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, "Password is required"],
       minlength: [8, "Password must be at least 8 characters long"],
-      select: false, // Don't include password in queries by default
+      select: false,
     },
     role: {
       type: String,
@@ -40,14 +159,19 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    // TrueLayer integration fields
+    apiKeys: [apiKeySchema],
+    apiKeyCount: {
+      type: Number,
+      default: 0,
+      max: [5, "Maximum of 5 API keys allowed"],
+    },
     trueLayerAccessToken: {
       type: String,
-      select: false, // Don't include in queries by default
+      select: false,
     },
     trueLayerRefreshToken: {
       type: String,
-      select: false, // Don't include in queries by default
+      select: false,
     },
     trueLayerTokenExpiresAt: {
       type: Date,
@@ -85,12 +209,11 @@ const userSchema = new mongoose.Schema(
     },
   },
   {
-    timestamps: true, // Automatically manage createdAt and updatedAt
+    timestamps: true,
     optimisticConcurrency: true,
   }
 );
 
-// Hash password before saving
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
@@ -103,7 +226,6 @@ userSchema.pre("save", async function (next) {
   }
 });
 
-// Method to compare passwords
 userSchema.methods.comparePassword = async function (candidatePassword) {
   try {
     return await bcrypt.compare(candidatePassword, this.password);
@@ -112,11 +234,9 @@ userSchema.methods.comparePassword = async function (candidatePassword) {
   }
 };
 
-// Add version key for optimistic concurrency control
 userSchema.set("timestamps", true);
 userSchema.set("versionKey", true);
 
-// Modify soft delete method to use optimistic concurrency control
 userSchema.methods.softDelete = async function () {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -164,7 +284,6 @@ userSchema.methods.restore = async function () {
   return await this.save();
 };
 
-// Modify default find queries to exclude soft-deleted documents
 userSchema.pre(/^find/, function (next) {
   if (!this.getQuery().includeSoftDeleted) {
     this.where({ isDeleted: false });
@@ -172,7 +291,6 @@ userSchema.pre(/^find/, function (next) {
   next();
 });
 
-// Add method for updating TrueLayer tokens with concurrency control
 userSchema.methods.updateTrueLayerTokens = async function (tokens) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -214,6 +332,128 @@ userSchema.methods.updateTrueLayerTokens = async function (tokens) {
     session.endSession();
   }
 };
+
+userSchema.methods.addApiKey = async function (name) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    if (this.apiKeyCount >= 5) {
+      throw new Error("Maximum number of API keys reached");
+    }
+
+    const key = ApiKeyService.generateKey();
+    const hashedKey = await ApiKeyService.hashKey(key);
+
+    const user = await this.model("User").findOneAndUpdate(
+      {
+        _id: this._id,
+        apiKeyCount: { $lt: 5 },
+      },
+      {
+        $push: { apiKeys: { key, name, hashedKey } },
+        $inc: { apiKeyCount: 1 },
+      },
+      {
+        new: true,
+        session,
+        runValidators: true,
+      }
+    );
+
+    if (!user) {
+      throw new Error("Failed to add API key");
+    }
+
+    await session.commitTransaction();
+    return { key, id: user.apiKeys[user.apiKeys.length - 1]._id };
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
+userSchema.methods.verifyApiKey = async function (key) {
+  // First, try to find the key directly using indexes
+  const user = await this.model("User")
+    .findOne({
+      _id: this._id,
+      "apiKeys.isActive": true,
+      "apiKeys.expiresAt": { $gt: new Date() },
+    })
+    .select("apiKeys")
+    .lean();
+
+  if (!user) return false;
+
+  // Use Promise.any to check all keys concurrently
+  try {
+    await Promise.any(
+      user.apiKeys
+        .filter((k) => k.isActive)
+        .map(async (apiKey) => {
+          const isValid = await ApiKeyService.verifyKey(key, apiKey.hashedKey);
+          if (!isValid) throw new Error("Key doesn't match");
+
+          // Update lastUsed timestamp
+          await this.model("User").updateOne(
+            {
+              _id: this._id,
+              "apiKeys._id": apiKey._id,
+            },
+            {
+              $set: { "apiKeys.$.lastUsed": new Date() },
+            }
+          );
+
+          return true;
+        })
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+userSchema.methods.deactivateApiKey = async function (keyId) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const user = await this.model("User").findOneAndUpdate(
+      {
+        _id: this._id,
+        "apiKeys._id": keyId,
+        "apiKeys.isActive": true,
+      },
+      {
+        $set: { "apiKeys.$.isActive": false },
+      },
+      {
+        new: true,
+        session,
+        runValidators: true,
+      }
+    );
+
+    if (!user) {
+      throw new Error("API key not found or already deactivated");
+    }
+
+    await session.commitTransaction();
+    return user.apiKeys.id(keyId);
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
+// Add API key methods to the user schema
+Object.assign(userSchema.methods, apiKeyMethods);
 
 const User = mongoose.model("User", userSchema);
 
