@@ -1,7 +1,7 @@
 const axios = require("axios");
 const config = require("../config/config");
 const logger = require("../config/logger");
-const jwt = require("jsonwebtoken");
+const { TrueLayerError } = require("../utils/errors");
 
 class TrueLayerService {
   static instance = null;
@@ -507,6 +507,168 @@ class TrueLayerService {
         category: transaction.transaction_classification?.[0],
       },
     };
+  }
+
+  async exchangeToken(code) {
+    try {
+      const response = await this.client.post("/connect/token", {
+        grant_type: "authorization_code",
+        client_id: config.trueLayer.clientId,
+        client_secret: config.trueLayer.clientSecret,
+        code,
+        redirect_uri: config.trueLayer.redirectUri,
+      });
+
+      logger.info("TrueLayer token exchange successful");
+      return response.data;
+    } catch (error) {
+      throw TrueLayerError.tokenExchangeFailed(
+        "Failed to exchange authorization code",
+        {
+          code,
+          originalError: error.message,
+        }
+      );
+    }
+  }
+
+  async getAccounts(accessToken) {
+    try {
+      const response = await this.client.get("/data/v1/accounts", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      logger.info("Retrieved accounts from TrueLayer");
+      return response.data.results;
+    } catch (error) {
+      throw TrueLayerError.dataRetrievalFailed("Failed to retrieve accounts", {
+        endpoint: "/data/v1/accounts",
+        originalError: error.message,
+      });
+    }
+  }
+
+  async getTransactions(accessToken, accountId, params = {}) {
+    try {
+      const response = await this.client.get(
+        `/data/v1/accounts/${accountId}/transactions`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          params: {
+            from: params.from,
+            to: params.to,
+            limit: params.limit || 100,
+          },
+        }
+      );
+
+      logger.info("Retrieved transactions from TrueLayer", {
+        accountId,
+        count: response.data.results.length,
+      });
+
+      return response.data.results;
+    } catch (error) {
+      throw TrueLayerError.dataRetrievalFailed(
+        "Failed to retrieve transactions",
+        {
+          accountId,
+          params,
+          endpoint: `/data/v1/accounts/${accountId}/transactions`,
+          originalError: error.message,
+        }
+      );
+    }
+  }
+
+  async refreshAccessToken(refreshToken) {
+    try {
+      const response = await this.client.post("/connect/token", {
+        grant_type: "refresh_token",
+        client_id: config.trueLayer.clientId,
+        client_secret: config.trueLayer.clientSecret,
+        refresh_token: refreshToken,
+      });
+
+      logger.info("TrueLayer access token refreshed successfully");
+      return response.data;
+    } catch (error) {
+      throw TrueLayerError.authenticationFailed(
+        "Failed to refresh access token",
+        {
+          originalError: error.message,
+        }
+      );
+    }
+  }
+
+  // Helper method to handle API errors
+  handleApiError(error) {
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      const { status, data } = error.response;
+
+      switch (status) {
+        case 401:
+          throw TrueLayerError.authenticationFailed(
+            "TrueLayer authentication failed",
+            {
+              status,
+              error: data.error,
+              description: data.error_description,
+            }
+          );
+
+        case 429:
+          throw TrueLayerError.rateLimit("TrueLayer rate limit exceeded", {
+            status,
+            error: data.error,
+            retryAfter: error.response.headers["retry-after"],
+          });
+
+        default:
+          throw TrueLayerError.dataRetrievalFailed(
+            "TrueLayer API request failed",
+            {
+              status,
+              error: data.error,
+              description: data.error_description,
+            }
+          );
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      throw TrueLayerError.connectionFailed(
+        "No response received from TrueLayer",
+        {
+          timeout: error.code === "ECONNABORTED",
+          originalError: error.message,
+        }
+      );
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      throw TrueLayerError.connectionFailed(
+        "Failed to make request to TrueLayer",
+        {
+          originalError: error.message,
+        }
+      );
+    }
+  }
+
+  // Utility method to validate access token format
+  validateAccessToken(accessToken) {
+    if (
+      !accessToken ||
+      typeof accessToken !== "string" ||
+      !accessToken.startsWith("Bearer ")
+    ) {
+      throw TrueLayerError.authenticationFailed("Invalid access token format", {
+        providedToken: accessToken,
+      });
+    }
+    return true;
   }
 }
 

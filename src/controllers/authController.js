@@ -10,6 +10,12 @@ const config = require("../config/config");
 const { v4: uuidv4 } = require("uuid");
 const TokenBlacklist = require("../models/TokenBlacklist");
 const TrueLayerService = require("../services/trueLayerService");
+const {
+  AuthenticationError,
+  RegistrationError,
+  ValidationError,
+  DatabaseError,
+} = require("../utils/errors");
 
 // Utility function to mask email
 const maskEmail = (email) => {
@@ -35,82 +41,54 @@ const registrationLimiter = rateLimit({
  */
 const register = async (req, res, next) => {
   try {
-    // Log registration attempt with IP
-    logger.info("Registration attempt:", {
-      ip: req.ip,
-      userAgent: req.headers["user-agent"],
-    });
-
-    // Validate request body
-    const { error, value } = registerSchema.validate(req.body, {
-      abortEarly: false,
-      allowUnknown: process.env.NODE_ENV !== "production",
-    });
-
-    if (error) {
-      logger.warn("Registration validation failed:", {
-        ip: req.ip,
-        errors: error.details,
-      });
-      return res.status(400).json({
-        status: "error",
-        message: "Validation failed",
-        errors: error.details.map((detail) => ({
-          field: detail.context.key,
-          message: detail.message,
-        })),
-      });
-    }
+    const { email, password } = req.body;
 
     // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [{ email: value.email }, { username: value.username }],
-    });
-
+    const existingUser = await User.findOne({ email });
     if (existingUser) {
-      logger.warn("Registration failed - user exists:", {
-        ip: req.ip,
-        email: maskEmail(value.email),
-        username: value.username,
-      });
-      return res.status(409).json({
-        status: "error",
-        message:
-          existingUser.email === value.email
-            ? "Email already registered"
-            : "Username already taken",
-      });
+      throw RegistrationError.emailInUse();
+    }
+
+    // Validate password strength
+    if (!isPasswordStrong(password)) {
+      throw RegistrationError.passwordWeak();
     }
 
     // Create new user
-    const user = new User({
-      username: value.username,
-      email: value.email,
-      password: value.password,
+    const user = new User({ email, password });
+    await user.save().catch((err) => {
+      if (err.name === "ValidationError") {
+        throw new ValidationError("Invalid registration data", err.errors);
+      }
+      throw DatabaseError.queryFailed({
+        operation: "create_user",
+        error: err.message,
+      });
     });
 
-    await user.save();
+    // Generate tokens
+    const { accessToken, refreshToken } = generateTokens(user);
 
-    logger.info("New user registered:", {
-      ip: req.ip,
-      userId: user._id,
-      email: maskEmail(user.email),
+    logger.info("User registered successfully", {
+      userId: user.id,
+      email: user.email,
     });
 
     res.status(201).json({
-      status: "success",
-      message: "Registration successful",
+      success: true,
       data: {
-        userId: user._id,
-        username: user.username,
-        email: maskEmail(user.email),
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+        },
+        tokens: {
+          accessToken,
+          refreshToken,
+        },
       },
     });
   } catch (error) {
-    logger.error("Registration error:", {
-      ip: req.ip,
-      error: error.message,
-    });
     next(error);
   }
 };
@@ -151,93 +129,37 @@ const generateTokens = (user) => {
 
 const login = async (req, res, next) => {
   try {
-    // Log login attempt
-    logger.info("Login attempt:", {
-      ip: req.ip,
-      userAgent: req.headers["user-agent"],
-    });
+    const { email, password } = req.body;
 
-    // Validate request body
-    const { error, value } = loginSchema.validate(req.body, {
-      abortEarly: false,
-      allowUnknown: process.env.NODE_ENV !== "production",
-    });
-
-    if (error) {
-      logger.warn("Login validation failed:", {
-        ip: req.ip,
-        errors: error.details,
-      });
-      return res.status(400).json({
-        status: "error",
-        message: "Validation failed",
-        errors: error.details.map((detail) => ({
-          field: detail.context.key,
-          message: detail.message,
-        })),
-      });
+    // Find user and check password
+    const user = await User.findOne({ email }).select("+password");
+    if (!user || !(await user.comparePassword(password))) {
+      throw AuthenticationError.credentialsInvalid();
     }
 
-    // Find user by email
-    const user = await User.findOne({ email: value.email }).select("+password");
+    // Generate tokens
+    const { accessToken, refreshToken } = generateTokens(user);
 
-    // Check if user exists and password is correct
-    if (!user || !(await user.comparePassword(value.password))) {
-      logger.warn("Login failed - Invalid credentials:", {
-        ip: req.ip,
-        email: maskEmail(value.email),
-      });
-      return res.status(401).json({
-        status: "error",
-        message: "Invalid email or password",
-      });
-    }
-
-    // Check if user is active
-    if (!user.isActive || user.isDeleted) {
-      logger.warn("Login failed - Inactive account:", {
-        ip: req.ip,
-        userId: user._id,
-        email: maskEmail(user.email),
-      });
-      return res.status(401).json({
-        status: "error",
-        message: "Account is inactive or has been deleted",
-      });
-    }
-
-    const { accessToken, refreshToken, jti } = generateTokens(user);
-
-    // Update last login timestamp
-    user.lastLogin = new Date();
-    await user.save();
-
-    logger.info("Login successful:", {
-      ip: req.ip,
-      userId: user._id,
-      email: maskEmail(user.email),
+    logger.info("User logged in successfully", {
+      userId: user.id,
+      email: user.email,
     });
 
-    // Send response with both tokens
-    res.status(200).json({
-      status: "success",
-      message: "Login successful",
+    res.json({
+      success: true,
       data: {
-        accessToken,
-        refreshToken,
         user: {
-          id: user._id,
-          username: user.username,
-          email: maskEmail(user.email),
+          id: user.id,
+          email: user.email,
           role: user.role,
+        },
+        tokens: {
+          accessToken,
+          refreshToken,
         },
       },
     });
   } catch (error) {
-    logger.error("Login error:", {
-      ip: req.ip,
-      error: error.message,
-    });
     next(error);
   }
 };
@@ -293,79 +215,60 @@ const getProfile = async (req, res, next) => {
 };
 
 // Add refresh token endpoint
-const refreshAccessToken = async (req, res, next) => {
+const refreshToken = async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
 
-    if (!refreshToken) {
-      return res.status(400).json({
-        status: "error",
-        message: "Refresh token is required",
-      });
-    }
-
     // Verify refresh token
-    const decoded = jwt.verify(refreshToken, config.jwt.secret);
+    const decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
 
     // Check if token is blacklisted
-    const isBlacklisted = await TokenBlacklist.exists({ token: decoded.jti });
+    const isBlacklisted = await TokenBlacklist.exists({ token: refreshToken });
     if (isBlacklisted) {
-      return res.status(401).json({
-        status: "error",
-        message: "Refresh token has been revoked",
-      });
+      throw AuthenticationError.tokenBlacklisted();
+    }
+
+    // Find user
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      throw AuthenticationError.tokenInvalid("User not found");
     }
 
     // Generate new tokens
-    const user = await User.findById(decoded.id).select("-password");
     const tokens = generateTokens(user);
 
     // Blacklist old refresh token
-    await TokenBlacklist.create({
-      token: decoded.jti,
-      expiresAt: new Date(decoded.exp * 1000),
-    });
+    await TokenBlacklist.create({ token: refreshToken });
 
-    res.status(200).json({
-      status: "success",
-      data: {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-      },
+    logger.info("Tokens refreshed successfully", { userId: user.id });
+
+    res.json({
+      success: true,
+      data: { tokens },
     });
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) {
-      return res.status(401).json({
-        status: "error",
-        message: "Refresh token has expired",
-      });
+      next(AuthenticationError.tokenExpired());
+    } else if (error instanceof jwt.JsonWebTokenError) {
+      next(AuthenticationError.tokenInvalid());
+    } else {
+      next(error);
     }
-    next(error);
   }
 };
 
 // Add logout function
 const logout = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
-      return res.status(400).json({
-        status: "error",
-        message: "Authorization header is required",
-      });
-    }
+    const { refreshToken } = req.body;
 
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.decode(token);
+    // Add refresh token to blacklist
+    await TokenBlacklist.create({ token: refreshToken });
 
-    // Add token to blacklist
-    await TokenBlacklist.create({
-      token: decoded.jti,
-      expiresAt: new Date(decoded.exp * 1000),
-    });
+    logger.info("User logged out successfully", { userId: req.user.id });
 
-    res.status(200).json({
-      status: "success",
+    res.json({
+      success: true,
       message: "Logged out successfully",
     });
   } catch (error) {
@@ -481,13 +384,21 @@ const exchangeTrueLayerToken = async (req, res) => {
   }
 };
 
+const isPasswordStrong = (password) => {
+  // Minimum 8 characters, at least one uppercase letter, one lowercase letter,
+  // one number and one special character
+  const strongPasswordRegex =
+    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+  return strongPasswordRegex.test(password);
+};
+
 module.exports = {
   register,
   registrationLimiter,
   login,
   loginLimiter,
   getProfile,
-  refreshAccessToken,
+  refreshToken,
   logout,
   exchangeTrueLayerToken,
 };
