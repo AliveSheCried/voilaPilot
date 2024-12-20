@@ -7,6 +7,9 @@ const trueLayerRoutes = require("./routes/trueLayerRoutes");
 const errorHandler = require("./middleware/errorHandler");
 const { validateApiVersion } = require("./middleware/trueLayerValidation");
 const config = require("./config/config");
+const { securityMiddleware } = require("./middleware/security");
+const { globalErrorHandler } = require("./utils/errors");
+const consoleRoutes = require("./routes/consoleRoutes");
 
 const app = express();
 
@@ -26,11 +29,27 @@ if (process.env.NODE_ENV !== "test") {
 // API version validation for all routes
 app.use("/api", validateApiVersion);
 
+// Apply security middleware
+app.use(securityMiddleware);
+
 // Routes
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/truelayer", trueLayerRoutes);
+app.use("/api/v1/console", consoleRoutes);
 
 // Error handling
 app.use(errorHandler);
+
+// Global error handler
+app.use(globalErrorHandler);
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "NOT_FOUND",
+    message: "Resource not found",
+  });
+});
 
 module.exports = app;

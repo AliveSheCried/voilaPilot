@@ -1,0 +1,314 @@
+openapi: 3.0.0
+info:
+  title: Developer Console API
+  version: 1.0.0
+  description: API documentation for the Developer Console
+
+servers:
+  - url: /api/v1
+    description: API v1
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "5f7b5d8a9b0c1d2e3f4a5b6c"
+        name:
+          type: string
+          example: "Production API Key"
+        createdAt:
+          type: string
+          format: date-time
+        lastUsed:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        isActive:
+          type: boolean
+          example: true
+
+    ApiKeyWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/ApiKey'
+        - type: object
+          properties:
+            key:
+              type: string
+              example: "vk_live_abcdef123456"
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Always false for error responses
+        error:
+          type: string
+          description: Error code identifier
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: array
+          items:
+            type: string
+          description: Additional error details
+
+    CreateKeyRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: ^[a-zA-Z0-9-_ ]+$
+          description: Name for the API key
+          example: "Production API Key"
+        expiresIn:
+          type: integer
+          minimum: 1
+          maximum: 365
+          default: 90
+          description: Number of days until key expiration
+          example: 90
+
+paths:
+  /console/keys:
+    get:
+      summary: Get all API keys for the authenticated user
+      tags:
+        - API Keys
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ApiKey'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+    
+    post:
+      summary: Create a new API key
+      tags:
+        - API Keys
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Production API Key"
+                  minLength: 3
+                  maxLength: 50
+                  pattern: "^[a-zA-Z0-9-_ ]+$"
+                expiresIn:
+                  type: integer
+                  example: 90
+                  minimum: 1
+                  maximum: 365
+              required:
+                - name
+      responses:
+        '201':
+          description: API key created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/ApiKeyWithSecret'
+                  message:
+                    type: string
+                    example: "API key created successfully. Please save this key as it won't be shown again."
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    enum: [KEY_LIMIT_REACHED, VALIDATION_ERROR]
+                  message:
+                    type: string
+                    example: "Maximum number of API keys (5) reached"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /console/metrics:
+    get:
+      summary: Get API usage metrics
+      description: Retrieve metrics about API key usage and system performance. Admin access required.
+      security:
+        - BearerAuth: []
+      tags:
+        - Monitoring
+      parameters:
+        - name: startDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Start date for metrics collection
+          example: "2023-06-01T00:00:00Z"
+        - name: endDate
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: End date for metrics collection
+          example: "2023-06-14T23:59:59Z"
+        - name: userId
+          in: query
+          schema:
+            type: string
+          description: Filter metrics by specific user ID
+          example: "5f7d3abd4c6c1d1234567890"
+      responses:
+        '200':
+          description: API usage metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      requestCount:
+                        type: integer
+                      averageResponseTime:
+                        type: number
+                      errorRate:
+                        type: number
+                      activeUsers:
+                        type: integer
+                      cacheStats:
+                        type: object
+                        properties:
+                          hits:
+                            type: integer
+                          misses:
+                            type: integer
+                          size:
+                            type: integer
+              example:
+                success: true
+                data:
+                  requestCount: 1500
+                  averageResponseTime: 45.2
+                  errorRate: 0.02
+                  activeUsers: 25
+                  cacheStats:
+                    hits: 1200
+                    misses: 300
+                    size: 500
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimitExceeded'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  responses:
+    UnauthorizedError:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: string
+                example: "AUTHENTICATION_ERROR"
+              message:
+                type: string
+                example: "Authentication required"
+
+    ForbiddenError:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: string
+                example: "AUTHORIZATION_ERROR"
+              message:
+                type: string
+                example: "Insufficient permissions"
+
+    RateLimitExceeded:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            error: "RATE_LIMIT_EXCEEDED"
+            message: "Too many requests, please try again later"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            error: "INTERNAL_ERROR"
+            message: "Internal server error" 

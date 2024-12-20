@@ -1,150 +1,230 @@
+const Redis = require("ioredis");
+const LRU = require("lru-cache");
 const logger = require("../config/logger");
 
-class CacheService {
-  constructor(options = {}) {
-    this.cache = new Map();
-    this.defaultTTL = options.defaultTTL || 60000; // 1 minute default TTL
-    this.maxSize = options.maxSize || 1000; // Maximum number of items to store
-    this.cleanupInterval = options.cleanupInterval || 300000; // 5 minutes
+// Redis client for distributed caching
+const redisClient = new Redis(
+  process.env.REDIS_URL || "redis://localhost:6379"
+);
 
-    // Start cleanup interval
-    this.startCleanup();
-  }
-
-  /**
-   * Get a value from cache
-   * @param {string} key - Cache key
-   * @returns {*} Cached value or undefined
-   */
-  get(key) {
-    const item = this.cache.get(key);
-    if (!item) return undefined;
-
-    if (Date.now() > item.expiresAt) {
-      this.cache.delete(key);
-      return undefined;
-    }
-
-    return item.value;
-  }
-
-  /**
-   * Set a value in cache
-   * @param {string} key - Cache key
-   * @param {*} value - Value to cache
-   * @param {number} ttl - Time to live in seconds
-   */
-  set(key, value, ttl = this.defaultTTL / 1000) {
-    // Check cache size before adding
-    if (this.cache.size >= this.maxSize) {
-      this.removeOldest();
-    }
-
-    this.cache.set(key, {
-      value,
-      expiresAt: Date.now() + ttl * 1000,
-      createdAt: Date.now(),
-    });
-
-    logger.debug("Cache item set", {
-      key,
-      ttl: `${ttl}s`,
-      cacheSize: this.cache.size,
-    });
-  }
-
-  /**
-   * Remove a value from cache
-   * @param {string} key - Cache key
-   */
-  delete(key) {
-    this.cache.delete(key);
-  }
-
-  /**
-   * Clear all cached values
-   */
-  clear() {
-    this.cache.clear();
-    logger.info("Cache cleared");
-  }
-
-  /**
-   * Remove oldest cache entries
-   * @private
-   */
-  removeOldest() {
-    const entries = Array.from(this.cache.entries()).sort(
-      (a, b) => a[1].createdAt - b[1].createdAt
-    );
-
-    // Remove 10% of oldest entries
-    const removeCount = Math.ceil(this.maxSize * 0.1);
-    entries.slice(0, removeCount).forEach(([key]) => {
-      this.cache.delete(key);
-    });
-
-    logger.debug("Removed oldest cache entries", {
-      removedCount: removeCount,
-      newSize: this.cache.size,
-    });
-  }
-
-  /**
-   * Start cleanup interval
-   * @private
-   */
-  startCleanup() {
-    setInterval(() => {
-      const now = Date.now();
-      let expiredCount = 0;
-
-      for (const [key, item] of this.cache.entries()) {
-        if (now > item.expiresAt) {
-          this.cache.delete(key);
-          expiredCount++;
-        }
-      }
-
-      if (expiredCount > 0) {
-        logger.debug("Cache cleanup completed", {
-          expiredRemoved: expiredCount,
-          remainingItems: this.cache.size,
-        });
-      }
-    }, this.cleanupInterval);
-  }
-
-  /**
-   * Get cache statistics
-   * @returns {Object} Cache statistics
-   */
-  getStats() {
-    const now = Date.now();
-    const stats = {
-      size: this.cache.size,
-      maxSize: this.maxSize,
-      expired: 0,
-      valid: 0,
-    };
-
-    for (const item of this.cache.values()) {
-      if (now > item.expiresAt) {
-        stats.expired++;
-      } else {
-        stats.valid++;
-      }
-    }
-
-    return stats;
-  }
-}
-
-// Create singleton instance
-const cache = new CacheService({
-  defaultTTL: process.env.CACHE_TTL || 60000,
-  maxSize: process.env.CACHE_MAX_SIZE || 1000,
-  cleanupInterval: process.env.CACHE_CLEANUP_INTERVAL || 300000,
+// In-memory LRU cache for frequently accessed data
+const lruCache = new LRU({
+  max: 1000, // Maximum number of items
+  maxAge: 1000 * 60 * 60, // Items expire after 1 hour
+  updateAgeOnGet: true, // Update item age on access
 });
 
-module.exports = cache;
+// Metrics for cache performance
+const metrics = {
+  hits: 0,
+  misses: 0,
+  errors: 0,
+  lastReset: Date.now(),
+};
+
+/**
+ * Reset cache metrics
+ * @private
+ */
+const resetMetrics = () => {
+  metrics.hits = 0;
+  metrics.misses = 0;
+  metrics.errors = 0;
+  metrics.lastReset = Date.now();
+};
+
+// Reset metrics every hour
+setInterval(resetMetrics, 60 * 60 * 1000);
+
+/**
+ * Get cache metrics
+ * @returns {Object} Current cache metrics
+ */
+const getMetrics = () => {
+  const total = metrics.hits + metrics.misses;
+  return {
+    hits: metrics.hits,
+    misses: metrics.misses,
+    errors: metrics.errors,
+    hitRate: total > 0 ? (metrics.hits / total) * 100 : 0,
+    totalRequests: total,
+    sinceTimestamp: metrics.lastReset,
+  };
+};
+
+/**
+ * Generate cache key
+ * @private
+ * @param {string} namespace - Cache namespace
+ * @param {string} key - Cache key
+ * @returns {string} Full cache key
+ */
+const getCacheKey = (namespace, key) => `cache:${namespace}:${key}`;
+
+/**
+ * Get item from cache
+ * @param {string} namespace - Cache namespace
+ * @param {string} key - Cache key
+ * @param {Object} options - Cache options
+ * @returns {Promise<*>} Cached value or null
+ */
+const get = async (namespace, key, options = {}) => {
+  const fullKey = getCacheKey(namespace, key);
+
+  try {
+    // Try LRU cache first
+    const localValue = lruCache.get(fullKey);
+    if (localValue !== undefined) {
+      metrics.hits++;
+      return JSON.parse(localValue);
+    }
+
+    // Try Redis
+    const redisValue = await redisClient.get(fullKey);
+    if (redisValue) {
+      // Update LRU cache
+      lruCache.set(fullKey, redisValue);
+      metrics.hits++;
+      return JSON.parse(redisValue);
+    }
+
+    metrics.misses++;
+    return null;
+  } catch (error) {
+    metrics.errors++;
+    logger.error("Cache get error", {
+      error: error.message,
+      namespace,
+      key,
+    });
+    return null;
+  }
+};
+
+/**
+ * Set item in cache
+ * @param {string} namespace - Cache namespace
+ * @param {string} key - Cache key
+ * @param {*} value - Value to cache
+ * @param {Object} options - Cache options
+ * @returns {Promise<boolean>} Success status
+ */
+const set = async (namespace, key, value, options = {}) => {
+  const fullKey = getCacheKey(namespace, key);
+  const ttl = options.ttl || 3600; // Default 1 hour
+  const stringValue = JSON.stringify(value);
+
+  try {
+    // Set in Redis
+    await redisClient.setex(fullKey, ttl, stringValue);
+
+    // Update LRU cache
+    lruCache.set(fullKey, stringValue);
+
+    return true;
+  } catch (error) {
+    metrics.errors++;
+    logger.error("Cache set error", {
+      error: error.message,
+      namespace,
+      key,
+    });
+    return false;
+  }
+};
+
+/**
+ * Delete item from cache
+ * @param {string} namespace - Cache namespace
+ * @param {string} key - Cache key
+ * @returns {Promise<boolean>} Success status
+ */
+const del = async (namespace, key) => {
+  const fullKey = getCacheKey(namespace, key);
+
+  try {
+    // Remove from both caches
+    await redisClient.del(fullKey);
+    lruCache.del(fullKey);
+
+    return true;
+  } catch (error) {
+    metrics.errors++;
+    logger.error("Cache delete error", {
+      error: error.message,
+      namespace,
+      key,
+    });
+    return false;
+  }
+};
+
+/**
+ * Clear namespace from cache
+ * @param {string} namespace - Cache namespace
+ * @returns {Promise<boolean>} Success status
+ */
+const clearNamespace = async (namespace) => {
+  try {
+    // Clear from Redis
+    const pattern = getCacheKey(namespace, "*");
+    const keys = await redisClient.keys(pattern);
+    if (keys.length > 0) {
+      await redisClient.del(keys);
+    }
+
+    // Clear matching keys from LRU cache
+    lruCache.keys().forEach((key) => {
+      if (key.startsWith(`cache:${namespace}:`)) {
+        lruCache.del(key);
+      }
+    });
+
+    return true;
+  } catch (error) {
+    metrics.errors++;
+    logger.error("Cache clear namespace error", {
+      error: error.message,
+      namespace,
+    });
+    return false;
+  }
+};
+
+/**
+ * Get cached value or compute if not found
+ * @param {string} namespace - Cache namespace
+ * @param {string} key - Cache key
+ * @param {Function} compute - Function to compute value if not cached
+ * @param {Object} options - Cache options
+ * @returns {Promise<*>} Cached or computed value
+ */
+const getOrCompute = async (namespace, key, compute, options = {}) => {
+  const cached = await get(namespace, key, options);
+  if (cached !== null) {
+    return cached;
+  }
+
+  try {
+    const computed = await compute();
+    await set(namespace, key, computed, options);
+    return computed;
+  } catch (error) {
+    metrics.errors++;
+    logger.error("Cache compute error", {
+      error: error.message,
+      namespace,
+      key,
+    });
+    throw error;
+  }
+};
+
+module.exports = {
+  get,
+  set,
+  del,
+  clearNamespace,
+  getOrCompute,
+  getMetrics,
+};

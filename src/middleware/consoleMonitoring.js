@@ -1,212 +1,198 @@
-const logger = require("../config/logger");
 const mongoose = require("mongoose");
+const logger = require("../config/logger");
+const { createSafeLoggingContext } = require("../utils/masking");
 
-// Define schema for metrics storage
-const MetricSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  endpoint: { type: String, required: true },
-  method: { type: String, required: true },
-  count: { type: Number, default: 0 },
-  lastAccess: { type: Date, default: Date.now },
-  responseTime: { type: Number, default: 0 }, // Average response time
-  totalResponses: { type: Number, default: 0 }, // Total number of responses
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
+// Metrics schema
+const metricsSchema = new mongoose.Schema({
+  timestamp: {
+    type: Date,
+    default: Date.now,
+    expires: 30 * 24 * 60 * 60, // Auto-delete after 30 days
+  },
+  userId: String,
+  endpoint: String,
+  method: String,
+  statusCode: Number,
+  responseTime: Number,
+  success: Boolean,
+  errorCode: String,
+  userAgent: String,
+  ip: String,
 });
 
-// Add indexes for frequent queries
-MetricSchema.index({ userId: 1, endpoint: 1, method: 1 });
-MetricSchema.index({ lastAccess: 1 }, { expireAfterSeconds: 86400 }); // Auto-delete after 24 hours
+const Metrics = mongoose.model("Metrics", metricsSchema);
 
-const Metric = mongoose.model("Metric", MetricSchema);
+// In-memory metrics buffer for batch processing
+const metricsBuffer = [];
+const BUFFER_SIZE = 100;
+const FLUSH_INTERVAL = 60000; // 1 minute
 
-// Dynamic thresholds based on endpoint and user role
-const thresholds = {
-  default: {
-    requestLimit: 50,
-    responseTimeWarning: 1000, // ms
-  },
-  admin: {
-    requestLimit: 200,
-    responseTimeWarning: 2000, // ms
-  },
-  endpoints: {
-    "/api/v1/console/keys": {
-      requestLimit: 100,
-      responseTimeWarning: 500, // ms
-    },
-    // Add more endpoint-specific thresholds as needed
-  },
-};
-
-// Helper to mask sensitive data
-const maskSensitiveData = (data) => {
-  if (!data) return data;
-
-  // Mask IP addresses
-  if (
-    typeof data === "string" &&
-    /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(data)
-  ) {
-    return data.replace(/\.\d+\.\d+$/, ".xxx.xxx");
+// Start buffer flush interval
+setInterval(async () => {
+  if (metricsBuffer.length > 0) {
+    await flushMetricsBuffer();
   }
+}, FLUSH_INTERVAL);
 
-  // Mask email addresses
-  if (typeof data === "string" && data.includes("@")) {
-    const [local, domain] = data.split("@");
-    return `${local.charAt(0)}***@${domain}`;
-  }
-
-  return data;
-};
-
-const monitorConsoleActivity = async (req, res, next) => {
-  const startTime = process.hrtime();
-  const userId = req.user?.id;
-  const userRole = req.user?.role || "user";
-  const endpoint = req.originalUrl;
-
-  // Get appropriate thresholds
-  const endpointThresholds =
-    thresholds.endpoints[endpoint] ||
-    thresholds[userRole] ||
-    thresholds.default;
-
+/**
+ * Flush metrics buffer to database
+ * @private
+ */
+const flushMetricsBuffer = async () => {
   try {
-    // Update or create metric
-    const metric = await Metric.findOneAndUpdate(
-      {
-        userId,
-        endpoint,
-        method: req.method,
-      },
-      {
-        $inc: { count: 1 },
-        $set: { lastAccess: new Date() },
-      },
-      {
-        upsert: true,
-        new: true,
-      }
-    );
+    const metrics = [...metricsBuffer];
+    metricsBuffer.length = 0; // Clear buffer
 
-    // Check for suspicious activity
-    if (metric.count > endpointThresholds.requestLimit) {
-      logger.warn("Suspicious console activity detected", {
-        userId,
-        ip: maskSensitiveData(req.ip),
-        endpoint,
-        requestCount: metric.count,
-        method: req.method,
-        userAgent: maskSensitiveData(req.headers["user-agent"]),
-      });
-    }
+    await Metrics.insertMany(metrics);
 
-    // Monitor response time and update metrics
-    const oldJson = res.json;
-    res.json = async function (data) {
-      const duration = process.hrtime(startTime);
-      const durationMs = duration[0] * 1000 + duration[1] / 1e6;
-
-      // Update response time metrics
-      await Metric.findByIdAndUpdate(metric._id, {
-        $inc: { totalResponses: 1 },
-        $set: {
-          responseTime:
-            (metric.responseTime * metric.totalResponses + durationMs) /
-            (metric.totalResponses + 1),
-          updatedAt: new Date(),
-        },
-      });
-
-      // Log slow responses
-      if (durationMs > endpointThresholds.responseTimeWarning) {
-        logger.warn("Slow console operation detected", {
-          userId,
-          ip: maskSensitiveData(req.ip),
-          endpoint,
-          duration: `${durationMs.toFixed(2)}ms`,
-          threshold: `${endpointThresholds.responseTimeWarning}ms`,
-        });
-      }
-
-      // Log operation completion
-      logger.info("Console operation completed", {
-        userId,
-        ip: maskSensitiveData(req.ip),
-        method: req.method,
-        path: endpoint,
-        duration: `${durationMs.toFixed(2)}ms`,
-        status: res.statusCode,
-      });
-
-      return oldJson.call(this, data);
-    };
-
-    next();
-  } catch (error) {
-    logger.error("Failed to update metrics", {
-      userId,
-      ip: maskSensitiveData(req.ip),
-      endpoint,
-      error: error.message,
+    logger.debug("Flushed metrics buffer", {
+      count: metrics.length,
+      oldestTimestamp: metrics[0].timestamp,
+      newestTimestamp: metrics[metrics.length - 1].timestamp,
     });
-    next();
+  } catch (error) {
+    logger.error("Failed to flush metrics buffer", {
+      error: error.message,
+      metricsCount: metricsBuffer.length,
+    });
   }
 };
 
-// Get metrics with aggregation
-const getMetrics = async (options = {}) => {
-  const { userId, startDate, endDate } = options;
+/**
+ * Add metric to buffer
+ * @private
+ */
+const bufferMetric = async (metric) => {
+  metricsBuffer.push(metric);
 
-  const match = {
-    ...(userId && { userId: mongoose.Types.ObjectId(userId) }),
-    ...(startDate &&
-      endDate && {
-        updatedAt: {
-          $gte: new Date(startDate),
-          $lte: new Date(endDate),
-        },
-      }),
-  };
+  if (metricsBuffer.length >= BUFFER_SIZE) {
+    await flushMetricsBuffer();
+  }
+};
 
-  const metrics = await Metric.aggregate([
-    { $match: match },
+/**
+ * Get aggregated metrics
+ * @param {Object} options - Query options
+ * @returns {Promise<Object>} Aggregated metrics
+ */
+const getMetrics = async ({ startDate, endDate, userId } = {}) => {
+  // Ensure buffer is flushed before querying
+  if (metricsBuffer.length > 0) {
+    await flushMetricsBuffer();
+  }
+
+  const query = {};
+  if (startDate) query.timestamp = { $gte: new Date(startDate) };
+  if (endDate)
+    query.timestamp = { ...query.timestamp, $lte: new Date(endDate) };
+  if (userId) query.userId = userId;
+
+  const [aggregation] = await Metrics.aggregate([
+    { $match: query },
     {
       $group: {
-        _id: {
-          endpoint: "$endpoint",
-          method: "$method",
+        _id: null,
+        requestCount: { $sum: 1 },
+        successCount: {
+          $sum: { $cond: [{ $eq: ["$success", true] }, 1, 0] },
         },
-        totalRequests: { $sum: "$count" },
-        avgResponseTime: { $avg: "$responseTime" },
+        errorCount: {
+          $sum: { $cond: [{ $eq: ["$success", false] }, 1, 0] },
+        },
+        totalResponseTime: { $sum: "$responseTime" },
+        maxResponseTime: { $max: "$responseTime" },
+        minResponseTime: { $min: "$responseTime" },
         uniqueUsers: { $addToSet: "$userId" },
+        endpoints: { $addToSet: "$endpoint" },
       },
     },
     {
       $project: {
-        endpoint: "$_id.endpoint",
-        method: "$_id.method",
-        totalRequests: 1,
-        avgResponseTime: { $round: ["$avgResponseTime", 2] },
-        uniqueUsers: { $size: "$uniqueUsers" },
+        _id: 0,
+        requestCount: 1,
+        successRate: {
+          $multiply: [{ $divide: ["$successCount", "$requestCount"] }, 100],
+        },
+        errorRate: {
+          $multiply: [{ $divide: ["$errorCount", "$requestCount"] }, 100],
+        },
+        averageResponseTime: {
+          $divide: ["$totalResponseTime", "$requestCount"],
+        },
+        maxResponseTime: 1,
+        minResponseTime: 1,
+        uniqueUserCount: { $size: "$uniqueUsers" },
+        endpointCount: { $size: "$endpoints" },
       },
     },
   ]);
 
-  return {
-    metrics,
-    summary: {
-      totalEndpoints: metrics.length,
-      totalRequests: metrics.reduce((sum, m) => sum + m.totalRequests, 0),
-      avgResponseTime:
-        metrics.reduce((sum, m) => sum + m.avgResponseTime, 0) / metrics.length,
-    },
+  return (
+    aggregation || {
+      requestCount: 0,
+      successRate: 0,
+      errorRate: 0,
+      averageResponseTime: 0,
+      maxResponseTime: 0,
+      minResponseTime: 0,
+      uniqueUserCount: 0,
+      endpointCount: 0,
+    }
+  );
+};
+
+/**
+ * Monitoring middleware
+ */
+const monitorConsoleActivity = async (req, res, next) => {
+  const startTime = Date.now();
+
+  // Capture response data
+  const originalSend = res.send;
+  res.send = function (body) {
+    const responseTime = Date.now() - startTime;
+    const success = res.statusCode < 400;
+
+    // Create metric
+    const metric = {
+      timestamp: new Date(),
+      userId: req.user?.id,
+      endpoint: req.path,
+      method: req.method,
+      statusCode: res.statusCode,
+      responseTime,
+      success,
+      errorCode: !success ? body?.error : undefined,
+      userAgent: req.headers["user-agent"],
+      ip: req.ip,
+    };
+
+    // Buffer metric
+    bufferMetric(metric).catch((error) => {
+      logger.error("Failed to buffer metric", {
+        error: error.message,
+        metric: createSafeLoggingContext(metric),
+      });
+    });
+
+    // Log slow requests
+    if (responseTime > 1000) {
+      logger.warn(
+        "Slow request detected",
+        createSafeLoggingContext({
+          ...metric,
+          body: undefined, // Don't log response body
+        })
+      );
+    }
+
+    originalSend.apply(res, arguments);
   };
+
+  next();
 };
 
 module.exports = {
   monitorConsoleActivity,
   getMetrics,
-  Metric, // Export for testing
 };

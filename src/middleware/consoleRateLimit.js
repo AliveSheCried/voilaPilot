@@ -1,105 +1,156 @@
 const rateLimit = require("express-rate-limit");
+const RedisStore = require("rate-limit-redis");
+const Redis = require("ioredis");
 const logger = require("../config/logger");
+const { createSafeLoggingContext } = require("../utils/masking");
 
-// Rate limit configurations based on user role and endpoint
-const rateLimitConfig = {
-  default: {
+// Redis client for rate limiting
+const redisClient = new Redis(
+  process.env.REDIS_URL || "redis://localhost:6379"
+);
+
+// Base rate limit configurations
+const baseLimits = {
+  standard: {
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
+    max: 100, // Limit each IP to 100 requests per windowMs
   },
-  admin: {
-    windowMs: 15 * 60 * 1000,
-    max: 1000, // Higher limit for admins
-  },
-  endpoints: {
-    "/api/v1/console/metrics": {
-      windowMs: 5 * 60 * 1000, // 5 minutes
-      max: 50,
-      skipFailedRequests: true, // Don't count failed requests
-    },
-    "/api/v1/console/keys": {
-      windowMs: 15 * 60 * 1000,
-      max: 200,
-      skipSuccessfulRequests: false,
-    },
+  burst: {
+    windowMs: 60 * 1000, // 1 minute
+    max: 30, // Limit each IP to 30 requests per minute
   },
 };
 
-// Helper to mask sensitive data in logs
-const maskSensitiveData = (data) => {
-  if (!data) return data;
+// Dynamic multipliers based on user roles
+const roleMultipliers = {
+  admin: 4,
+  developer: 2,
+  user: 1,
+};
 
-  // Mask IP addresses
-  if (
-    typeof data === "string" &&
-    /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(data)
-  ) {
-    return data.replace(/\.\d+\.\d+$/, ".xxx.xxx");
+// Endpoint-specific configurations
+const endpointConfigs = {
+  "/api/v1/console/keys": {
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 50, // Stricter limit for key management
+  },
+};
+
+/**
+ * Get dynamic rate limit based on user role and traffic patterns
+ * @param {Object} req - Express request object
+ * @returns {Object} Rate limit configuration
+ */
+const getDynamicRateLimit = async (req) => {
+  const endpoint = req.path;
+  const userRole = req.user?.role || "user";
+  const multiplier = roleMultipliers[userRole] || 1;
+
+  // Use endpoint-specific config if available
+  const baseConfig = endpointConfigs[endpoint] || baseLimits.standard;
+
+  try {
+    // Check recent traffic patterns
+    const recentRequests = await redisClient.get(`traffic:${endpoint}`);
+    const isHighTraffic = recentRequests > baseConfig.max * 0.8;
+
+    // Adjust limits based on traffic
+    const adjustedMax = isHighTraffic
+      ? Math.floor(baseConfig.max * 0.8) // Reduce limit during high traffic
+      : Math.floor(baseConfig.max * multiplier);
+
+    return {
+      windowMs: baseConfig.windowMs,
+      max: adjustedMax,
+    };
+  } catch (error) {
+    logger.error("Failed to get dynamic rate limit", {
+      error: error.message,
+      endpoint,
+      userRole,
+    });
+    return baseConfig;
   }
-
-  return data;
 };
 
-// Create rate limiter middleware factory
-const createRateLimiter = (endpoint) => {
+/**
+ * Create rate limiter middleware
+ * @param {Object} options - Rate limit options
+ * @returns {Function} Rate limit middleware
+ */
+const createRateLimiter = (options = {}) => {
   return rateLimit({
-    windowMs:
-      rateLimitConfig.endpoints[endpoint]?.windowMs ||
-      rateLimitConfig.default.windowMs,
-    max: (req) => {
-      // Get configuration based on user role and endpoint
-      const userRole = req.user?.role || "user";
-      const endpointConfig = rateLimitConfig.endpoints[endpoint];
-      const roleConfig = rateLimitConfig[userRole];
-
-      // Use the most permissive limit that applies
-      return Math.max(
-        endpointConfig?.max || 0,
-        roleConfig?.max || 0,
-        rateLimitConfig.default.max
-      );
-    },
-    message: {
-      success: false,
-      error: "RATE_LIMIT_EXCEEDED",
-      message: "Too many requests, please try again later",
-    },
-    handler: (req, res, next, options) => {
-      logger.warn("Rate limit exceeded for console operations", {
-        ip: maskSensitiveData(req.ip),
+    store: new RedisStore({
+      client: redisClient,
+      prefix: "rl:",
+    }),
+    windowMs: options.windowMs || baseLimits.standard.windowMs,
+    max: options.max || baseLimits.standard.max,
+    handler: (req, res) => {
+      const context = createSafeLoggingContext({
+        ip: req.ip,
         userId: req.user?.id,
-        role: req.user?.role,
-        endpoint: req.originalUrl,
+        endpoint: req.path,
         userAgent: req.headers["user-agent"],
-        remainingRequests: res.getHeader("X-RateLimit-Remaining"),
       });
-      res.status(429).json(options.message);
+
+      logger.warn("Rate limit exceeded", context);
+
+      res.status(429).json({
+        error: "Too many requests",
+        retryAfter: Math.ceil(options.windowMs / 1000),
+      });
     },
     keyGenerator: (req) => {
-      // Use combination of IP and user ID for rate limiting
-      return `${req.ip}-${req.user?.id || "anonymous"}-${req.user?.role || "user"}`;
+      // Use combination of IP and user ID if available
+      return req.user?.id ? `${req.ip}:${req.user.id}` : req.ip;
     },
     skip: (req) => {
-      // Skip rate limiting for health checks and admin metrics
-      if (req.path === "/health") return true;
-      if (req.user?.role === "admin" && req.path === "/metrics") return true;
-      return false;
+      // Skip rate limiting for health checks
+      return req.path === "/health";
     },
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Store in-memory for development, use Redis for production
-    store: process.env.NODE_ENV === "production" ? undefined : undefined, // TODO: Add Redis store
+    onLimitReached: (req, res, options) => {
+      // Track rate limit violations
+      const context = createSafeLoggingContext({
+        ip: req.ip,
+        userId: req.user?.id,
+        endpoint: req.path,
+        userAgent: req.headers["user-agent"],
+      });
+
+      logger.warn("Rate limit reached", {
+        ...context,
+        limit: options.max,
+        windowMs: options.windowMs,
+      });
+    },
   });
 };
 
-// Middleware to apply rate limiting based on endpoint
-const consoleLimiter = (req, res, next) => {
-  const endpoint = req.path;
-  const limiter = createRateLimiter(endpoint);
-  return limiter(req, res, next);
+/**
+ * Dynamic rate limiting middleware
+ */
+const dynamicRateLimit = async (req, res, next) => {
+  try {
+    const config = await getDynamicRateLimit(req);
+    const limiter = createRateLimiter(config);
+    await limiter(req, res, next);
+  } catch (error) {
+    logger.error("Rate limiting error", {
+      error: error.message,
+      path: req.path,
+    });
+    // Fall back to default rate limit on error
+    const defaultLimiter = createRateLimiter();
+    await defaultLimiter(req, res, next);
+  }
 };
 
+// Export middleware and configurations for testing
 module.exports = {
-  consoleLimiter,
-  rateLimitConfig, // Export for testing
+  dynamicRateLimit,
+  baseLimits,
+  roleMultipliers,
+  endpointConfigs,
+  getDynamicRateLimit,
 };
