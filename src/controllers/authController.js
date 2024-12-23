@@ -1,21 +1,17 @@
-const User = require("../models/User");
-const logger = require("../config/logger");
-const {
-  registerSchema,
-  loginSchema,
-} = require("../validations/authValidation");
-const rateLimit = require("express-rate-limit");
-const jwt = require("jsonwebtoken");
-const config = require("../config/config");
-const { v4: uuidv4 } = require("uuid");
-const TokenBlacklist = require("../models/TokenBlacklist");
-const TrueLayerService = require("../services/trueLayerService");
-const {
+import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
+import { v4 as uuidv4 } from "uuid";
+import config from "../config/config.js";
+import logger from "../config/logger.js";
+import TokenBlacklist from "../models/TokenBlacklist.js";
+import User from "../models/User.js";
+import TrueLayerService from "../services/trueLayerService.js";
+import {
   AuthenticationError,
+  DatabaseError,
   RegistrationError,
   ValidationError,
-  DatabaseError,
-} = require("../utils/errors");
+} from "../utils/errors.js";
 
 // Utility function to mask email
 const maskEmail = (email) => {
@@ -220,7 +216,7 @@ const refreshToken = async (req, res, next) => {
     const { refreshToken } = req.body;
 
     // Verify refresh token
-    const decoded = jwt.verify(refreshToken, config.jwt.refreshSecret);
+    const decoded = jwt.verify(refreshToken, config.refreshSecret);
 
     // Check if token is blacklisted
     const isBlacklisted = await TokenBlacklist.exists({ token: refreshToken });
@@ -392,13 +388,13 @@ const isPasswordStrong = (password) => {
   return strongPasswordRegex.test(password);
 };
 
-module.exports = {
-  register,
-  registrationLimiter,
+export {
+  exchangeTrueLayerToken,
+  getProfile,
   login,
   loginLimiter,
-  getProfile,
-  refreshToken,
   logout,
-  exchangeTrueLayerToken,
+  refreshToken,
+  register,
+  registrationLimiter,
 };

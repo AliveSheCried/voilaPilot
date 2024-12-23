@@ -1,8 +1,8 @@
-const rateLimit = require("express-rate-limit");
-const RedisStore = require("rate-limit-redis");
-const Redis = require("ioredis");
-const logger = require("../config/logger");
-const { createSafeLoggingContext } = require("../utils/masking");
+import rateLimit from "express-rate-limit";
+import Redis from "ioredis";
+import RedisStore from "rate-limit-redis";
+import logger from "../config/logger.js";
+import { createSafeLoggingContext } from "../utils/masking.js";
 
 // Redis client for rate limiting
 const redisClient = new Redis(
@@ -146,11 +146,10 @@ const dynamicRateLimit = async (req, res, next) => {
   }
 };
 
-// Export middleware and configurations for testing
-module.exports = {
-  dynamicRateLimit,
+export {
   baseLimits,
-  roleMultipliers,
+  dynamicRateLimit,
   endpointConfigs,
   getDynamicRateLimit,
+  roleMultipliers,
 };

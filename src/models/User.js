@@ -1,7 +1,7 @@
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
-const ApiKeyService = require("../services/apiKeyService");
-const apiKeyMethods = require("./apiKeyMethods");
+import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
+import ApiKeyService from "../services/apiKeyService.js";
+import apiKeyMethods from "./apiKeyMethods.js";
 
 // API Key Schema
 const apiKeySchema = new mongoose.Schema(
@@ -457,4 +457,4 @@ Object.assign(userSchema.methods, apiKeyMethods);
 
 const User = mongoose.model("User", userSchema);
 
-module.exports = User;
+export default User;

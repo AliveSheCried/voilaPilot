@@ -1,6 +1,6 @@
-const User = require("../models/User");
-const TrueLayerService = require("../services/trueLayerService");
-const logger = require("../config/logger");
+import logger from "../config/logger.js";
+import User from "../models/User.js";
+import TrueLayerService from "../services/trueLayerService.js";
 
 /**
  * Get user's bank accounts from TrueLayer
@@ -201,7 +201,4 @@ function isValidDate(dateString) {
   return date instanceof Date && !isNaN(date);
 }
 
-module.exports = {
-  getAccounts,
-  getTransactions,
-};
+export { getAccounts, getTransactions };

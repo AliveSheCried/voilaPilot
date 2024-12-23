@@ -1,42 +1,27 @@
-const mongoose = require("mongoose");
-const logger = require("./logger");
+import mongoose from "mongoose";
+import logger from "./logger.js";
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 5000; // 5 seconds
+const connectWithRetry = async (retries = 5, delay = 5000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI);
+      logger.info("MongoDB connected successfully");
+      return;
+    } catch (error) {
+      logger.error(`MongoDB connection attempt ${attempt} failed:`, {
+        error: error.message,
+        stack: error.stack,
+      });
 
-const connectWithRetry = async (retryCount = 0) => {
-  try {
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
+      if (attempt === retries) {
+        logger.error("Max retries reached. Exiting...");
+        process.exit(1);
+      }
 
-    logger.info(`MongoDB Connected: ${mongoose.connection.host}`);
-
-    mongoose.connection.on("error", (err) => {
-      logger.error("MongoDB connection error:", err);
-    });
-
-    mongoose.connection.on("disconnected", () => {
-      logger.warn("MongoDB disconnected. Attempting to reconnect...");
-      setTimeout(() => connectWithRetry(0), RETRY_DELAY);
-    });
-  } catch (error) {
-    if (retryCount < MAX_RETRIES) {
-      logger.warn(
-        `MongoDB connection attempt ${retryCount + 1} failed. Retrying in ${
-          RETRY_DELAY / 1000
-        } seconds...`
-      );
-      setTimeout(() => connectWithRetry(retryCount + 1), RETRY_DELAY);
-    } else {
-      logger.error(
-        "Failed to connect to MongoDB after maximum retries:",
-        error
-      );
-      process.exit(1);
+      logger.info(`Retrying in ${delay / 1000} seconds...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 };
 
-module.exports = connectWithRetry;
+export default connectWithRetry;

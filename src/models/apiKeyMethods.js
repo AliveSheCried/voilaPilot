@@ -1,5 +1,5 @@
-const mongoose = require("mongoose");
-const ApiKeyService = require("../services/apiKeyService");
+import mongoose from "mongoose";
+import ApiKeyService from "../services/apiKeyService.js";
 
 const apiKeyMethods = {
   async addApiKey(name) {
@@ -96,4 +96,4 @@ const apiKeyMethods = {
   },
 };
 
-module.exports = apiKeyMethods;
+export default apiKeyMethods;

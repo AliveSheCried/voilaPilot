@@ -1,37 +1,15 @@
 /**
- * Utility functions for masking sensitive data
- */
-
-/**
- * Mask an IP address by hiding the last two octets
+ * Mask an IP address
  * @param {string} ip - IP address to mask
  * @returns {string} Masked IP address
  */
 const maskIP = (ip) => {
-  if (!ip) return ip;
-
-  // Handle IPv4
-  if (ip.includes(".")) {
-    const parts = ip.split(".");
-    if (parts.length === 4) {
-      return `${parts[0]}.${parts[1]}.xxx.xxx`;
-    }
+  if (!ip) return "";
+  const parts = ip.split(".");
+  if (parts.length === 4) {
+    return `${parts[0]}.${parts[1]}.*.*`;
   }
-
-  // Handle IPv6
-  if (ip.includes(":")) {
-    const parts = ip.split(":");
-    if (parts.length > 2) {
-      return parts.slice(0, 3).join(":") + ":xxxx:xxxx";
-    }
-  }
-
-  // Handle localhost and other special cases
-  if (ip === "::1" || ip === "127.0.0.1") {
-    return "localhost";
-  }
-
-  return "xxx.xxx.xxx.xxx";
+  return ip.substring(0, ip.length / 2) + "*".repeat(ip.length / 2);
 };
 
 /**
@@ -40,16 +18,13 @@ const maskIP = (ip) => {
  * @returns {string} Masked email address
  */
 const maskEmail = (email) => {
-  if (!email) return email;
-
+  if (!email) return "";
   const [local, domain] = email.split("@");
   if (!domain) return email;
-
   const maskedLocal =
-    local.length > 2
-      ? `${local[0]}${new Array(local.length - 1).join("*")}${local[local.length - 1]}`
-      : local[0] + "**";
-
+    local.charAt(0) +
+    "*".repeat(local.length - 2) +
+    local.charAt(local.length - 1);
   return `${maskedLocal}@${domain}`;
 };
 
@@ -59,58 +34,72 @@ const maskEmail = (email) => {
  * @returns {string} Masked API key
  */
 const maskApiKey = (key) => {
-  if (!key) return key;
-
-  if (key.startsWith("vk_")) {
-    return `vk_${new Array(8).join("*")}`;
-  }
-
-  return new Array(8).join("*");
+  if (!key) return "";
+  const visibleChars = 4;
+  return "*".repeat(key.length - visibleChars) + key.slice(-visibleChars);
 };
 
 /**
  * Mask sensitive data in an object
- * @param {Object} obj - Object containing potentially sensitive data
+ * @param {Object} data - Object containing sensitive data
  * @returns {Object} Object with masked sensitive data
  */
-const maskSensitiveData = (obj) => {
-  if (!obj || typeof obj !== "object") return obj;
+const maskSensitiveData = (data) => {
+  if (!data || typeof data !== "object") return data;
 
-  const masked = { ...obj };
+  const sensitiveFields = [
+    "password",
+    "token",
+    "apiKey",
+    "secret",
+    "email",
+    "ip",
+    "accessToken",
+    "refreshToken",
+  ];
 
-  // Mask known sensitive fields
-  if (masked.ip) masked.ip = maskIP(masked.ip);
-  if (masked.email) masked.email = maskEmail(masked.email);
-  if (masked.apiKey) masked.apiKey = maskApiKey(masked.apiKey);
-  if (masked.key) masked.key = maskApiKey(masked.key);
+  const maskedData = { ...data };
 
-  // Recursively mask nested objects
-  Object.keys(masked).forEach((key) => {
-    if (typeof masked[key] === "object" && masked[key] !== null) {
-      masked[key] = maskSensitiveData(masked[key]);
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === "object" && value !== null) {
+      maskedData[key] = maskSensitiveData(value);
+    } else if (typeof value === "string") {
+      const lowerKey = key.toLowerCase();
+      if (sensitiveFields.some((field) => lowerKey.includes(field))) {
+        if (lowerKey.includes("email")) {
+          maskedData[key] = maskEmail(value);
+        } else if (lowerKey.includes("ip")) {
+          maskedData[key] = maskIP(value);
+        } else if (lowerKey.includes("key") || lowerKey.includes("token")) {
+          maskedData[key] = maskApiKey(value);
+        } else {
+          maskedData[key] = "*".repeat(8);
+        }
+      }
     }
-  });
+  }
 
-  return masked;
+  return maskedData;
 };
 
 /**
- * Create a production-safe logging context
- * @param {Object} context - Logging context
- * @returns {Object} Masked logging context for production
+ * Create a safe logging context by masking sensitive data
+ * @param {Object} context - Logging context object
+ * @returns {Object} Safe logging context with masked sensitive data
  */
 const createSafeLoggingContext = (context) => {
-  if (process.env.NODE_ENV !== "production") {
-    return context;
-  }
+  if (!context || typeof context !== "object") return context;
 
-  return maskSensitiveData(context);
+  // Clone the context to avoid modifying the original
+  const safeContext = JSON.parse(JSON.stringify(context));
+
+  return maskSensitiveData(safeContext);
 };
 
-module.exports = {
-  maskIP,
-  maskEmail,
-  maskApiKey,
-  maskSensitiveData,
+export {
   createSafeLoggingContext,
+  maskApiKey,
+  maskEmail,
+  maskIP,
+  maskSensitiveData,
 };

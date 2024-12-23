@@ -1,6 +1,6 @@
-const Redis = require("ioredis");
-const LRU = require("lru-cache");
-const logger = require("../config/logger");
+import Redis from "ioredis";
+import LRU from "lru-cache";
+import logger from "../config/logger.js";
 
 // Redis client for distributed caching
 const redisClient = new Redis(
@@ -111,12 +111,16 @@ const get = async (namespace, key, options = {}) => {
  */
 const set = async (namespace, key, value, options = {}) => {
   const fullKey = getCacheKey(namespace, key);
-  const ttl = options.ttl || 3600; // Default 1 hour
   const stringValue = JSON.stringify(value);
 
   try {
     // Set in Redis
-    await redisClient.setex(fullKey, ttl, stringValue);
+    await redisClient.set(
+      fullKey,
+      stringValue,
+      "EX",
+      options.ttl || 3600 // Default 1 hour TTL
+    );
 
     // Update LRU cache
     lruCache.set(fullKey, stringValue);
@@ -143,8 +147,10 @@ const del = async (namespace, key) => {
   const fullKey = getCacheKey(namespace, key);
 
   try {
-    // Remove from both caches
+    // Delete from Redis
     await redisClient.del(fullKey);
+
+    // Delete from LRU cache
     lruCache.del(fullKey);
 
     return true;
@@ -160,71 +166,28 @@ const del = async (namespace, key) => {
 };
 
 /**
- * Clear namespace from cache
- * @param {string} namespace - Cache namespace
+ * Clear entire cache
  * @returns {Promise<boolean>} Success status
  */
-const clearNamespace = async (namespace) => {
+const clear = async () => {
   try {
-    // Clear from Redis
-    const pattern = getCacheKey(namespace, "*");
-    const keys = await redisClient.keys(pattern);
-    if (keys.length > 0) {
-      await redisClient.del(keys);
-    }
+    // Clear Redis
+    await redisClient.flushdb();
 
-    // Clear matching keys from LRU cache
-    lruCache.keys().forEach((key) => {
-      if (key.startsWith(`cache:${namespace}:`)) {
-        lruCache.del(key);
-      }
-    });
+    // Clear LRU cache
+    lruCache.reset();
+
+    // Reset metrics
+    resetMetrics();
 
     return true;
   } catch (error) {
     metrics.errors++;
-    logger.error("Cache clear namespace error", {
+    logger.error("Cache clear error", {
       error: error.message,
-      namespace,
     });
     return false;
   }
 };
 
-/**
- * Get cached value or compute if not found
- * @param {string} namespace - Cache namespace
- * @param {string} key - Cache key
- * @param {Function} compute - Function to compute value if not cached
- * @param {Object} options - Cache options
- * @returns {Promise<*>} Cached or computed value
- */
-const getOrCompute = async (namespace, key, compute, options = {}) => {
-  const cached = await get(namespace, key, options);
-  if (cached !== null) {
-    return cached;
-  }
-
-  try {
-    const computed = await compute();
-    await set(namespace, key, computed, options);
-    return computed;
-  } catch (error) {
-    metrics.errors++;
-    logger.error("Cache compute error", {
-      error: error.message,
-      namespace,
-      key,
-    });
-    throw error;
-  }
-};
-
-module.exports = {
-  get,
-  set,
-  del,
-  clearNamespace,
-  getOrCompute,
-  getMetrics,
-};
+export { clear, del, get, getMetrics, set };

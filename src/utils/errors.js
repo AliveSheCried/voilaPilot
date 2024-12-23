@@ -1,3 +1,5 @@
+import logger from "../config/logger.js";
+
 class AppError extends Error {
   constructor(message, statusCode, errorCode) {
     super(message);
@@ -8,6 +10,19 @@ class AppError extends Error {
     this.timestamp = new Date().toISOString();
 
     Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+// API Key Errors
+class ApiKeyError extends AppError {
+  constructor(message = "API key error", errorCode = "API_KEY_ERROR") {
+    super(message, 400, errorCode);
+  }
+}
+
+class ApiKeyNotFoundError extends AppError {
+  constructor(message = "API key not found") {
+    super(message, 404, "API_KEY_NOT_FOUND");
   }
 }
 
@@ -54,118 +69,67 @@ class RegistrationError extends AppError {
   }
 }
 
-// TrueLayer Integration Errors
 class TrueLayerError extends AppError {
-  constructor(message, statusCode, errorCode, details = {}) {
-    super(message, statusCode, `TRUELAYER_${errorCode}`);
-    this.source = "TrueLayer";
-    this.details = details;
+  constructor(message, subType = "GENERAL") {
+    super(message, 500, `TRUELAYER_${subType}`);
+    this.subType = subType;
   }
 
-  static authenticationFailed(
-    message = "TrueLayer authentication failed",
-    details = {}
-  ) {
-    return new TrueLayerError(message, 401, "AUTH_FAILED", details);
+  static connectionFailed(message = "Failed to connect to TrueLayer") {
+    return new TrueLayerError(message, "CONNECTION_FAILED");
   }
 
-  static tokenExchangeFailed(message = "Token exchange failed", details = {}) {
-    return new TrueLayerError(message, 400, "TOKEN_EXCHANGE_FAILED", details);
+  static authenticationFailed(message = "TrueLayer authentication failed") {
+    return new TrueLayerError(message, "AUTH_FAILED");
   }
 
-  static dataRetrievalFailed(
-    message = "Failed to retrieve data",
-    details = {}
-  ) {
-    return new TrueLayerError(message, 500, "DATA_RETRIEVAL_FAILED", details);
-  }
-
-  static rateLimit(message = "Rate limit exceeded", details = {}) {
-    return new TrueLayerError(message, 429, "RATE_LIMIT", details);
-  }
-
-  static connectionFailed(
-    message = "Connection to TrueLayer failed",
-    details = {}
-  ) {
-    return new TrueLayerError(message, 503, "CONNECTION_FAILED", details);
+  static resourceNotFound(message = "TrueLayer resource not found") {
+    return new TrueLayerError(message, "NOT_FOUND");
   }
 }
 
-// Validation Errors
 class ValidationError extends AppError {
-  constructor(message, details = []) {
+  constructor(message = "Validation failed", details = []) {
     super(message, 400, "VALIDATION_ERROR");
     this.details = details;
   }
 }
 
-// Authorization Errors
 class AuthorizationError extends AppError {
-  constructor(message = "Insufficient permissions", subType = "GENERAL") {
+  constructor(message = "Authorization failed", subType = "GENERAL") {
     super(message, 403, `AUTHORIZATION_${subType}`);
     this.subType = subType;
   }
 
-  static roleRequired(role, message = `Role ${role} required`) {
+  static roleRequired(role, message = "Insufficient permissions") {
     return new AuthorizationError(message, "ROLE_REQUIRED");
   }
-
-  static resourceForbidden(message = "Access to resource forbidden") {
-    return new AuthorizationError(message, "RESOURCE_FORBIDDEN");
-  }
 }
 
-// Resource Errors
 class ResourceNotFoundError extends AppError {
-  constructor(resource = "Resource", details = {}) {
-    super(`${resource} not found`, 404, "NOT_FOUND_ERROR");
+  constructor(resource, message = "Resource not found") {
+    super(message, 404, "NOT_FOUND");
     this.resource = resource;
-    this.details = details;
   }
 }
 
-// Rate Limiting
 class RateLimitError extends AppError {
-  constructor(message = "Rate limit exceeded", details = {}) {
+  constructor(message = "Too many requests", retryAfter = 60) {
     super(message, 429, "RATE_LIMIT_ERROR");
-    this.details = details;
+    this.retryAfter = retryAfter;
   }
 }
 
-// Database Errors
 class DatabaseError extends AppError {
-  constructor(message = "Database operation failed", operation, details = {}) {
-    super(message, 500, `DATABASE_${operation}`);
-    this.operation = operation;
+  constructor(message = "Database error", subType = "GENERAL", details = {}) {
+    super(message, 500, `DATABASE_${subType}`);
+    this.subType = subType;
     this.details = details;
-  }
-
-  static connectionFailed(details = {}) {
-    return new DatabaseError(
-      "Database connection failed",
-      "CONNECTION_FAILED",
-      details
-    );
-  }
-
-  static queryFailed(details = {}) {
-    return new DatabaseError("Database query failed", "QUERY_FAILED", details);
-  }
-
-  static validationFailed(details = {}) {
-    return new DatabaseError(
-      "Database validation failed",
-      "VALIDATION_FAILED",
-      details
-    );
   }
 }
 
 // Global error handler middleware
 const globalErrorHandler = (err, req, res, next) => {
-  const logger = require("../config/logger");
-
   // Log error with correlation ID and request context
   logger.error("Error occurred:", {
     error: {
@@ -231,15 +195,17 @@ const globalErrorHandler = (err, req, res, next) => {
   });
 };
 
-module.exports = {
+export {
+  ApiKeyError,
+  ApiKeyNotFoundError,
   AppError,
   AuthenticationError,
+  AuthorizationError,
+  DatabaseError,
+  RateLimitError,
   RegistrationError,
+  ResourceNotFoundError,
   TrueLayerError,
   ValidationError,
-  AuthorizationError,
-  ResourceNotFoundError,
-  RateLimitError,
-  DatabaseError,
   globalErrorHandler,
 };

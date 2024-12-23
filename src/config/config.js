@@ -1,6 +1,10 @@
-const dotenv = require("dotenv");
-const path = require("path");
-const logger = require("./logger");
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+import logger from "./logger.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Load env vars
 dotenv.config({ path: path.join(__dirname, "../../.env") });
@@ -17,7 +21,9 @@ const requiredEnvVars = [
 const missingEnvVars = requiredEnvVars.filter((envVar) => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
-  const errorMessage = `Missing required environment variables: ${missingEnvVars.join(", ")}`;
+  const errorMessage = `Missing required environment variables: ${missingEnvVars.join(
+    ", "
+  )}`;
   logger.error(errorMessage, {
     availableVars: Object.keys(process.env).filter(
       (key) => !key.includes("KEY")
@@ -83,4 +89,4 @@ const config = {
   },
 };
 
-module.exports = config;
+export default config;

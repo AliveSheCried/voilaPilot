@@ -1,31 +1,31 @@
-const MonitoringService = require("../services/monitoringService");
-const logger = require("../config/logger");
+import logger from "../config/logger.js";
 
 /**
- * Middleware to track API request metrics
+ * Track API metrics middleware
  */
-const trackApiMetrics = async (req, res, next) => {
-  // Record start time
-  const startTime = process.hrtime();
+const trackApiMetrics = (req, res, next) => {
+  const start = Date.now();
 
   // Store original end function
   const originalEnd = res.end;
 
-  // Override end function to capture response time
+  // Override end function
   res.end = function (...args) {
-    // Calculate response time
-    const diff = process.hrtime(startTime);
-    const responseTime = (diff[0] * 1e3 + diff[1] * 1e-6).toFixed(2);
+    const duration = Date.now() - start;
+    const size = res.get("Content-Length");
 
-    // Track metrics asynchronously
-    MonitoringService.trackApiRequest(req, res, responseTime).catch((err) => {
-      logger.error("Failed to track API metrics", {
-        error: err.message,
-        path: req.path,
-      });
+    // Log metrics
+    logger.info("API Metrics", {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      duration: `${duration}ms`,
+      size: size ? `${size}b` : "unknown",
+      correlationId: req.correlationId,
+      userId: req.user?.id,
     });
 
-    // Call original end function
+    // Call original end
     originalEnd.apply(res, args);
   };
 
@@ -33,21 +33,25 @@ const trackApiMetrics = async (req, res, next) => {
 };
 
 /**
- * Middleware to track error metrics
+ * Track error metrics middleware
  */
-const trackErrorMetrics = async (err, req, res, next) => {
-  // Track error metrics asynchronously
-  MonitoringService.trackError(err, req).catch((trackingError) => {
-    logger.error("Failed to track error metrics", {
-      error: trackingError.message,
-      originalError: err.message,
-    });
+const trackErrorMetrics = (err, req, res, next) => {
+  logger.error("Error Metrics", {
+    error: {
+      name: err.name,
+      message: err.message,
+      code: err.code,
+      statusCode: err.statusCode,
+    },
+    request: {
+      method: req.method,
+      path: req.path,
+      correlationId: req.correlationId,
+      userId: req.user?.id,
+    },
   });
 
   next(err);
 };
 
-module.exports = {
-  trackApiMetrics,
-  trackErrorMetrics,
-};
+export { trackApiMetrics, trackErrorMetrics };

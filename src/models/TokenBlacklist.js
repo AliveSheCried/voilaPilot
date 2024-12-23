@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const tokenBlacklistSchema = new mongoose.Schema({
   token: {
@@ -15,4 +15,4 @@ const tokenBlacklistSchema = new mongoose.Schema({
 
 const TokenBlacklist = mongoose.model("TokenBlacklist", tokenBlacklistSchema);
 
-module.exports = TokenBlacklist;
+export default TokenBlacklist;

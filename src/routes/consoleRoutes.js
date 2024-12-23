@@ -1,19 +1,19 @@
-const express = require("express");
-const { authenticateJWT } = require("../middleware/auth");
-const { dynamicRateLimit } = require("../middleware/consoleRateLimit");
-const { monitorConsoleActivity } = require("../middleware/consoleMonitoring");
-const {
-  validateCreateKey,
-  validateKeyId,
-} = require("../validations/consoleValidation");
-const {
-  getApiKeys,
+import express from "express";
+import logger from "../config/logger.js";
+import {
   createKey,
   deleteKey,
-} = require("../controllers/consoleController");
-const cache = require("../services/cacheService");
-const logger = require("../config/logger");
-const { AuthorizationError } = require("../utils/errors");
+  getApiKeys,
+} from "../controllers/consoleController.js";
+import { authenticateJWT } from "../middleware/auth.js";
+import { monitorConsoleActivity } from "../middleware/consoleMonitoring.js";
+import { dynamicRateLimit } from "../middleware/consoleRateLimit.js";
+import { get as cacheGet, set as cacheSet } from "../services/cacheService.js";
+import { AuthorizationError } from "../utils/errors.js";
+import {
+  validateCreateKey,
+  validateKeyId,
+} from "../validations/consoleValidation.js";
 
 const router = express.Router();
 
@@ -55,7 +55,7 @@ const cacheResponse = (duration) => (req, res, next) => {
   }
 
   // Try to get from cache
-  const cachedResponse = cache.get(key);
+  const cachedResponse = cacheGet(key);
   if (cachedResponse) {
     logger.debug("Serving cached response", {
       userId: req.user.id,
@@ -69,7 +69,7 @@ const cacheResponse = (duration) => (req, res, next) => {
   res.json = function (data) {
     // Only cache successful responses
     if (res.statusCode === 200 && data.success) {
-      cache.set(key, data, duration);
+      cacheSet(key, data, duration);
       logger.debug("Caching response", {
         userId: req.user.id,
         cacheKey: key,
@@ -82,130 +82,33 @@ const cacheResponse = (duration) => (req, res, next) => {
   next();
 };
 
-/**
- * Cache invalidation middleware
- */
-const invalidateCache = () => (req, res, next) => {
-  const key = `api-keys-${req.user.id}`;
-
-  // Store the original json method
-  const originalJson = res.json;
-  res.json = function (data) {
-    // Invalidate cache on successful mutations
-    if (res.statusCode === 200 || res.statusCode === 201) {
-      cache.del(key);
-      logger.debug("Cache invalidated", {
-        userId: req.user.id,
-        cacheKey: key,
-      });
-    }
-    return originalJson.call(this, data);
-  };
-
-  next();
-};
-
-// Apply common middleware to all routes
+// Apply authentication to all routes
 router.use(authenticateJWT);
-router.use(dynamicRateLimit);
-router.use(monitorConsoleActivity);
 
-// API Key management routes
+// Get all API keys
 router.get(
   "/keys",
-  checkRole(["user", "admin"]),
-  cacheResponse(60),
+  dynamicRateLimit,
+  cacheResponse(300), // Cache for 5 minutes
   getApiKeys
 );
 
+// Create new API key
 router.post(
   "/keys",
-  checkRole(["user", "admin"]),
+  dynamicRateLimit,
   validateCreateKey,
-  invalidateCache(),
+  monitorConsoleActivity,
   createKey
 );
 
+// Delete API key
 router.delete(
-  "/keys/:keyId",
-  checkRole(["user", "admin"]),
+  "/keys/:id",
+  dynamicRateLimit,
   validateKeyId,
-  invalidateCache(),
+  monitorConsoleActivity,
   deleteKey
 );
 
-// Metrics endpoint (admin only)
-router.get("/metrics", checkRole(["admin"]), async (req, res, next) => {
-  try {
-    const { getMetrics } = require("../middleware/consoleMonitoring");
-    const { startDate, endDate, userId } = req.query;
-
-    // Get metrics data
-    const metricsData = await getMetrics({
-      userId,
-      startDate,
-      endDate,
-    });
-
-    // Include cache statistics
-    const cacheStats = cache.getMetrics();
-
-    res.json({
-      success: true,
-      data: {
-        ...metricsData,
-        cache: cacheStats,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Cache management endpoint (admin only)
-router.post("/cache/clear", checkRole(["admin"]), async (req, res, next) => {
-  try {
-    const { userId, namespace } = req.query;
-
-    if (userId) {
-      // Clear specific user's cache
-      await cache.del("api-keys", userId);
-      logger.info("Cleared user cache", { userId });
-    } else if (namespace) {
-      // Clear namespace
-      await cache.clearNamespace(namespace);
-      logger.info("Cleared cache namespace", { namespace });
-    } else {
-      // Clear matching keys from cache
-      await cache.clearNamespace("api-keys");
-      logger.info("Cleared API keys cache");
-    }
-
-    res.json({
-      success: true,
-      message: "Cache cleared successfully",
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Health check endpoint (no auth required)
-router.get("/health", (req, res) => {
-  const metrics = cache.getMetrics();
-
-  res.json({
-    success: true,
-    data: {
-      status: "healthy",
-      timestamp: new Date().toISOString(),
-      cache: {
-        status: metrics.hits > 0 ? "operational" : "idle",
-        hitRate: metrics.hitRate.toFixed(2) + "%",
-        errors: metrics.errors,
-      },
-    },
-  });
-});
-
-module.exports = router;
+export default router;

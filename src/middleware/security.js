@@ -1,10 +1,10 @@
-const helmet = require("helmet");
-const xss = require("xss-clean");
-const hpp = require("hpp");
-const cors = require("cors");
-const rateLimit = require("express-rate-limit");
-const { RateLimitError } = require("../utils/errors");
-const logger = require("../config/logger");
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+import hpp from "hpp";
+import xss from "xss-clean";
+import logger from "../config/logger.js";
+import { RateLimitError, ValidationError } from "../utils/errors.js";
 
 // Security middleware configuration
 const securityConfig = {
@@ -112,7 +112,4 @@ const securityMiddleware = [
   },
 ];
 
-module.exports = {
-  securityMiddleware,
-  securityConfig, // Export for testing
-};
+export { securityConfig, securityMiddleware };

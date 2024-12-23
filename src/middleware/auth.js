@@ -1,6 +1,6 @@
-const passport = require("passport");
-const { AuthenticationError, AuthorizationError } = require("../utils/errors");
-const logger = require("../config/logger");
+import passport from "passport";
+import logger from "../config/logger.js";
+import { AuthenticationError, AuthorizationError } from "../utils/errors.js";
 
 /**
  * Middleware to authenticate requests using JWT
@@ -160,9 +160,4 @@ const validateTrueLayerWebhook = (req, res, next) => {
   }
 };
 
-module.exports = {
-  authenticate,
-  authorize,
-  validateApiKey,
-  validateTrueLayerWebhook,
-};
+export { authenticate as authenticateJWT, authorize };

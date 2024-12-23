@@ -1,4 +1,4 @@
-const { param, query, validationResult } = require("express-validator");
+import { param, query, validationResult } from "express-validator";
 
 /**
  * Validate transaction query parameters
@@ -60,7 +60,4 @@ function validateApiVersion(req, res, next) {
   next();
 }
 
-module.exports = {
-  validateTransactionParams,
-  validateApiVersion,
-};
+export { validateApiVersion, validateTransactionParams };

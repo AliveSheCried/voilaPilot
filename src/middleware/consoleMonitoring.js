@@ -1,6 +1,6 @@
-const mongoose = require("mongoose");
-const logger = require("../config/logger");
-const { createSafeLoggingContext } = require("../utils/masking");
+import mongoose from "mongoose";
+import logger from "../config/logger.js";
+import { createSafeLoggingContext } from "../utils/masking.js";
 
 // Metrics schema
 const metricsSchema = new mongoose.Schema({
@@ -192,7 +192,4 @@ const monitorConsoleActivity = async (req, res, next) => {
   next();
 };
 
-module.exports = {
-  monitorConsoleActivity,
-  getMetrics,
-};
+export { getMetrics, monitorConsoleActivity };

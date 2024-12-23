@@ -1,13 +1,13 @@
-const express = require("express");
-const {
-  register,
-  registrationLimiter,
+import express from "express";
+import {
+  exchangeTrueLayerToken,
+  getProfile,
   login,
   loginLimiter,
-  getProfile,
-  exchangeTrueLayerToken,
-} = require("../controllers/authController");
-const { authenticateJWT } = require("../middleware/auth");
+  register,
+  registrationLimiter,
+} from "../controllers/authController.js";
+import { authenticateJWT } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -19,4 +19,4 @@ router.get("/profile", authenticateJWT, getProfile);
 // TrueLayer integration routes
 router.post("/truelayer/connect", authenticateJWT, exchangeTrueLayerToken);
 
-module.exports = router;
+export default router;

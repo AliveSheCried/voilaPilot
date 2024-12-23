@@ -1,13 +1,13 @@
-const User = require("../models/User");
-const logger = require("../config/logger");
-const ApiKeyService = require("../services/apiKeyService");
-const { createSafeLoggingContext } = require("../utils/masking");
-const {
-  ApiKeyNotFoundError,
+import logger from "../config/logger.js";
+import User from "../models/User.js";
+import ApiKeyService from "../services/apiKeyService.js";
+import {
   ApiKeyError,
+  ApiKeyNotFoundError,
   ResourceNotFoundError,
   ValidationError,
-} = require("../utils/errors");
+} from "../utils/errors.js";
+import { createSafeLoggingContext } from "../utils/masking.js";
 
 /**
  * Create a new API key for the user
@@ -257,8 +257,4 @@ const deleteKey = async (req, res) => {
   }
 };
 
-module.exports = {
-  createKey,
-  getApiKeys,
-  deleteKey,
-};
+export { createKey, deleteKey, getApiKeys };

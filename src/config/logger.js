@@ -1,5 +1,5 @@
-const winston = require("winston");
-const { createSafeLoggingContext } = require("../utils/masking");
+import winston from "winston";
+import { createSafeLoggingContext } from "../utils/masking.js";
 
 // Define log levels
 const levels = {
@@ -38,7 +38,9 @@ const consoleFormat = winston.format.combine(
     const context = Object.keys(args).length
       ? createSafeLoggingContext(args)
       : "";
-    return `${timestamp} [${level}]: ${message} ${context ? JSON.stringify(context, null, 2) : ""}`;
+    return `${timestamp} [${level}]: ${message} ${
+      context ? JSON.stringify(context, null, 2) : ""
+    }`;
   })
 );
 
@@ -50,7 +52,9 @@ const fileFormat = winston.format.combine(
     const context = Object.keys(args).length
       ? createSafeLoggingContext(args)
       : "";
-    return `${timestamp} [${level.toUpperCase()}]: ${message} ${context ? JSON.stringify(context) : ""}`;
+    return `${timestamp} [${level.toUpperCase()}]: ${message} ${
+      context ? JSON.stringify(context) : ""
+    }`;
   })
 );
 
@@ -88,4 +92,4 @@ const logger = winston.createLogger({
   ],
 });
 
-module.exports = logger;
+export default logger;

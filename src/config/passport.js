@@ -1,9 +1,9 @@
-const passport = require("passport");
-const { Strategy: JwtStrategy, ExtractJwt } = require("passport-jwt");
-const User = require("../models/User");
-const logger = require("./logger");
-const config = require("./config");
-const TokenBlacklist = require("../models/TokenBlacklist");
+import passport from "passport";
+import { ExtractJwt, Strategy as JwtStrategy } from "passport-jwt";
+import TokenBlacklist from "../models/TokenBlacklist.js";
+import User from "../models/User.js";
+import config from "./config.js";
+import logger from "./logger.js";
 
 const options = {
   jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -60,4 +60,4 @@ passport.use(
   })
 );
 
-module.exports = passport;
+export default passport;

@@ -1,6 +1,6 @@
-const crypto = require("crypto");
-const bcrypt = require("bcryptjs");
-const logger = require("../config/logger");
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
+import logger from "../config/logger.js";
 
 // LRU Cache for key verification results
 class LRUCache {
@@ -158,7 +158,9 @@ class ApiKeyService {
 
     const prefix = parts[0];
     const value = parts[1];
-    return `${prefix}_${value.substring(0, 4)}${"*".repeat(35)}${value.slice(-4)}`;
+    return `${prefix}_${value.substring(0, 4)}${"*".repeat(35)}${value.slice(
+      -4
+    )}`;
   }
 
   /**
@@ -173,4 +175,4 @@ class ApiKeyService {
 // Initialize key buffer
 ApiKeyService._fillKeyBuffer();
 
-module.exports = ApiKeyService;
+export default ApiKeyService;

@@ -1,5 +1,5 @@
-const Joi = require("joi");
-const logger = require("../config/logger");
+import Joi from "joi";
+import logger from "../config/logger.js";
 
 const createKeySchema = Joi.object({
   name: Joi.string()
@@ -77,7 +77,4 @@ const validateKeyId = (req, res, next) => {
   next();
 };
 
-module.exports = {
-  validateCreateKey,
-  validateKeyId,
-};
+export { validateCreateKey, validateKeyId };

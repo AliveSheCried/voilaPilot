@@ -1,12 +1,10 @@
-const express = require("express");
-const { authenticateJWT } = require("../middleware/auth");
-const {
-  validateTransactionParams,
-} = require("../middleware/trueLayerValidation");
-const {
+import express from "express";
+import {
   getAccounts,
   getTransactions,
-} = require("../controllers/trueLayerController");
+} from "../controllers/trueLayerController.js";
+import { authenticateJWT } from "../middleware/auth.js";
+import { validateTransactionParams } from "../middleware/trueLayerValidation.js";
 
 const router = express.Router();
 
@@ -24,4 +22,4 @@ router.get(
   getTransactions
 );
 
-module.exports = router;
+export default router;
